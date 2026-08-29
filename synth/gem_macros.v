@@ -1,6 +1,5 @@
 // GEM heterogeneous macro support -- canonical blackbox cells.
 // Read with:  read_verilog -lib synth/gem_macros.v
-//
 // These are the ONLY macro cell names that reach GEM's Rust netlist parser.
 // They follow GEM's existing convention for library macros ($__RAMGEM_SYNC_),
 // so src/aigpdk.rs matches on these names and never on Xilinx spellings.
