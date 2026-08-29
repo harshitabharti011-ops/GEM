@@ -37,6 +37,7 @@
 //! out.
 
 use crate::macros::MacroKind;
+use std::collections::HashMap;
 
 /// Lanes per warp. Each kind's run is padded to a multiple of this so a batch
 /// never straddles a memory segment.
@@ -108,6 +109,12 @@ pub struct MacroLayout {
     pub descriptors: Vec<u32>,
     /// `descriptors` CSR offsets; length `slots.len() + 1`.
     pub desc_start: Vec<usize>,
+    /// netlistdb cell id -> index into `slots` / `desc_start`.
+    ///
+    /// The per-partition script references macros by this index rather than
+    /// carrying their descriptors inline: a DSP's descriptor is 128 words, and
+    /// duplicating that into every block script would dwarf the script itself.
+    pub slot_of_cell: HashMap<usize, usize>,
 }
 
 impl MacroLayout {
@@ -127,6 +134,7 @@ impl MacroLayout {
                 layout.slots.push(MacroSlot {
                     cellid: m.cellid, kind: m.kind, word_index,
                 });
+                layout.slot_of_cell.insert(m.cellid, layout.slots.len() - 1);
                 layout.desc_start.push(layout.descriptors.len());
                 layout.descriptors.extend_from_slice(&[
                     kind_code(m.kind),
@@ -149,6 +157,11 @@ impl MacroLayout {
         layout.desc_start.push(layout.descriptors.len());
         layout.word_state_size = base;
         layout
+    }
+
+    /// Index into `slots` for a netlistdb cell id.
+    pub fn slot_index_of(&self, cellid: usize) -> Option<usize> {
+        self.slot_of_cell.get(&cellid).copied()
     }
 
     /// Descriptor words for one macro, by position in `slots`.
@@ -342,6 +355,23 @@ mod tests {
             assert_eq!((base, count), (0, n));
             assert_eq!(l.desc_start.len(), n + 1);
         }
+    }
+
+    /// Every macro must be addressable by cell id, and the index must agree
+    /// with its position in `slots` -- the script encodes only this index.
+    #[test]
+    fn slot_index_of_agrees_with_slots_order() {
+        let ms = vec![io(7, MacroKind::Srlc32e, 3), io(11, MacroKind::Dsp48e2, 5),
+                      io(3, MacroKind::Carry4, 10), io(5, MacroKind::Dsp48e2, 5)];
+        let l = MacroLayout::build(&ms);
+        assert_eq!(l.slot_of_cell.len(), ms.len(), "every cell id is mapped");
+        for (i, slot) in l.slots.iter().enumerate() {
+            assert_eq!(l.slot_index_of(slot.cellid), Some(i));
+        }
+        assert_eq!(l.slot_index_of(999), None);
+        // and the index really does select that macro's descriptor
+        let i = l.slot_index_of(11).unwrap();
+        assert_eq!(l.descriptor(i)[0], kind_code(MacroKind::Dsp48e2));
     }
 
     #[test]

@@ -6,7 +6,7 @@ use crate::aig::{AIG, EndpointGroup, DriverType};
 use crate::aigpdk::AIGPDK_SRAM_ADDR_WIDTH;
 use crate::pe::{Partition, BOOMERANG_NUM_STAGES, BOOMERANG_MAX_WRITEOUTS};
 use crate::staging::StagedAIG;
-use crate::macro_layout::{MacroIo, MacroLayout, NO_BIT};
+use crate::macro_layout::{MacroIo, MacroLayout, NO_BIT, kind_code};
 use crate::macros::MacroBlock;
 
 /// Writeout activation for a macro's inputs.
@@ -100,6 +100,15 @@ pub struct FlattenedScriptV1 {
     ///       followed by [3(+1padding)x]
     ///         clock invert, clock set0, data invert, and 0 padding
     ///    -. commit the write-out
+    /// 5. macro section (only if metadata[8] != 0; starts at metadata[9],
+    ///    a word offset from the beginning of this partition's script).
+    ///    repeated metadata[8] times:
+    ///      32-bit boomerang stage index this batch runs AFTER
+    ///      32-bit macro kind code (see macro_layout::kind_code)
+    ///      32-bit count
+    ///      count x 32-bit index into FlattenedScriptV1::macro_layout.slots,
+    ///        i.e. into the macro_desc_start CSR.
+    ///    a batch is type-homogeneous, so every lane of it runs one kind.
     pub blocks_data: UVec<u32>,
     /// the state size including DFF and I/O states only.
     ///
@@ -608,6 +617,7 @@ impl FlatteningPart {
         &self, aig: &AIG, part: &Partition,
         input_map: &IndexMap<usize, u32>,
         staged_io_map: &IndexMap<usize, u32>,
+        macro_layout: &MacroLayout,
     ) -> Vec<u32> {
         let mut script = Vec::<u32>::new();
 
@@ -620,6 +630,11 @@ impl FlatteningPart {
         script.push(self.sram_start);
         script.push(0);   // [6]=num global read rounds, assigned later
         script.push(self.num_duplicate_writeouts);
+        // [8]=macro batch count, [9]=macro section word offset. Both are
+        // patched once the rest of the script is laid out. Words 8..128 were
+        // padding, so this costs nothing.
+        script.push(0);
+        script.push(0);
         // padding
         while script.len() < 128 {
             script.push(0);
@@ -819,6 +834,32 @@ impl FlatteningPart {
             script.push(0);
         }
 
+        // --- macro section --------------------------------------------------
+        // Batches reference macros by their index in macro_layout.slots rather
+        // than carrying descriptors inline: a DSP's descriptor is 128 words,
+        // and duplicating that into every block script would dwarf the script.
+        let macro_section_start = script.len() as u32;
+        let mut num_batches = 0u32;
+        for (stage_i, bs) in part.stages.iter().enumerate() {
+            for batch in &bs.macro_ops {
+                script.push(stage_i as u32);
+                script.push(kind_code(batch.kind));
+                script.push(batch.cellids.len() as u32);
+                for &cellid in &batch.cellids {
+                    let slot = macro_layout.slot_index_of(cellid)
+                        .unwrap_or_else(|| panic!(
+                            "macro cell {} scheduled in a boomerang stage but \
+                             absent from the memory layout -- the formatter \
+                             and the scheduler disagree about which macros \
+                             this partition owns", cellid));
+                    script.push(slot as u32);
+                }
+                num_batches += 1;
+            }
+        }
+        script[8] = num_batches;
+        script[9] = if num_batches == 0 { 0 } else { macro_section_start };
+
         script
     }
 }
@@ -930,6 +971,16 @@ fn build_flattened_script_v1(
         stages_flattening_parts.push(flattening_parts);
     }
 
+    // Host-side memory formatting has to happen BEFORE the scripts are built:
+    // a script references each macro by its index in macro_layout.slots.
+    let macro_ios: Vec<MacroIo> = stages_flattening_parts.iter()
+        .flat_map(|parts| parts.iter().flat_map(|p| p.macro_ios.iter().cloned()))
+        .collect();
+    let macro_layout = MacroLayout::build(&macro_ios);
+    clilog::info!("Macro word-state: {} u64 ({} bytes, 64-bit aligned), {} macros, {} descriptor words",
+                  macro_layout.word_state_size, macro_layout.word_state_bytes(),
+                  macro_layout.slots.len(), macro_layout.descriptors.len());
+
     for ((blocks_parts, flattening_parts), init_parts) in stages_blocks_parts.iter().zip(
         stages_flattening_parts.iter_mut()
     ).zip(
@@ -940,7 +991,8 @@ fn build_flattened_script_v1(
         for part_id in 0..init_parts.len() {
             // clilog::debug!("building script for part {}", part_id);
             parts_data_split[part_id] = flattening_parts[part_id].build_script(
-                aig, &init_parts[part_id], &input_map, &staged_io_map
+                aig, &init_parts[part_id], &input_map, &staged_io_map,
+                &macro_layout
             );
         }
 
@@ -968,15 +1020,6 @@ fn build_flattened_script_v1(
     blocks_start.push(blocks_data.len());
     blocks_data.extend((0..NUM_THREADS_V1 * 8).map(|_| 0)); // padding
 
-    // Host-side memory formatting for the macros: group by kind, pad each run
-    // to a warp, and emit the PACK/UNPACK descriptors.
-    let macro_ios: Vec<MacroIo> = stages_flattening_parts.iter()
-        .flat_map(|parts| parts.iter().flat_map(|p| p.macro_ios.iter().cloned()))
-        .collect();
-    let macro_layout = MacroLayout::build(&macro_ios);
-    clilog::info!("Macro word-state: {} u64 ({} bytes, 64-bit aligned), {} macros, {} descriptor words",
-                  macro_layout.word_state_size, macro_layout.word_state_bytes(),
-                  macro_layout.slots.len(), macro_layout.descriptors.len());
 
     clilog::info!("Built script for {} blocks, reg/io state size {}, sram size {}, script size {}",
                   num_blocks, sum_state_start, sum_srams_start, blocks_data.len());
