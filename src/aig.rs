@@ -7,6 +7,7 @@
 use netlistdb::{NetlistDB, GeneralPinName, Direction};
 use indexmap::{IndexMap, IndexSet};
 use crate::aigpdk::AIGPDK_SRAM_ADDR_WIDTH;
+use crate::macros::{MacroBlock, MacroKind};
 
 /// A DFF.
 #[derive(Debug, Default, Clone)]
@@ -50,6 +51,10 @@ pub enum EndpointGroup<'i> {
     PrimaryOutput(usize),
     DFF(&'i DFF),
     RAMBlock(&'i RAMBlock),
+    /// A stateful macro (DSP48E2 PREG, SRLC32E shifter). CARRY4 is absent
+    /// on purpose: it holds nothing, so it is ordinary combinational logic
+    /// and never an endpoint.
+    Macro(&'i MacroBlock),
     StagedIOPin(usize),
 }
 
@@ -78,6 +83,7 @@ impl EndpointGroup<'_> {
                     f(ram.port_w_wr_data_iv[i] >> 1);
                 }
             },
+            Self::Macro(mb) => mb.for_each_seq_input(f),
             Self::StagedIOPin(idx) => f(idx),
         }
     }
@@ -101,6 +107,13 @@ pub enum DriverType {
     DFF(usize),
     /// Driven by a 13-bit by 32-bit RAM block (with its index)
     SRAM(usize),
+    /// Driven by a word-level macro: (cell id, output slot).
+    ///
+    /// Unlike SRAM this MAY have combinational fan-in -- a CARRY4 sits inside
+    /// the cone. The fan-in lives in `MacroBlock::comb_in_iv` rather than in
+    /// the variant, because it is variable length and resolved in a later
+    /// pass. `topo_traverse_generic` recurses through it.
+    Macro(usize, u32),
     /// Tie0: tied to zero. Only the 0-th aig pin is allowed to have this.
     Tie0
 }
@@ -140,6 +153,11 @@ pub struct AIG {
     pub dffs: IndexMap<usize, DFF>,
     /// The SRAMs, indexed by cell id
     pub srams: IndexMap<usize, RAMBlock>,
+    /// The word-level macros, indexed by cell id.
+    pub macros: IndexMap<usize, MacroBlock>,
+    /// Cell ids of the stateful macros only, in endpoint-group order.
+    /// Built once at the end of `from_netlistdb`.
+    pub seq_macro_ids: Vec<usize>,
     /// The fanout CSR start array.
     pub fanouts_start: Vec<usize>,
     /// The fanout CSR array.
@@ -372,6 +390,34 @@ impl AIG {
             let sram = self.srams.entry(cellid).or_default();
             sram.port_r_rd_data[netlistdb.pinnames[pinid].2.unwrap() as usize] = o;
         }
+        else if let Some(kind) = MacroKind::from_celltype(celltype) {
+            // Resolve combinational fan-in FIRST so this output's aigpin id
+            // lands above its inputs', preserving the "AIG pins are in
+            // topological order" invariant the rest of GEM relies on.
+            let mut comb_pins = Vec::new();
+            for other in netlistdb.cell2pin.iter_set(cellid) {
+                if netlistdb.pindirect[other] != Direction::I { continue }
+                if kind.is_comb_input(netlistdb.pinnames[other].1.as_str()) {
+                    comb_pins.push(other);
+                }
+            }
+            for other in comb_pins {
+                self.dfs_netlistdb_build_aig(
+                    netlistdb, topo_vis, topo_instack, other
+                );
+            }
+            let slot = kind.output_slot(
+                netlistdb.pinnames[pinid].1.as_str(),
+                netlistdb.pinnames[pinid].2.map(|b| b as isize)
+            ).unwrap_or_else(|| panic!(
+                "unexpected output pin {} on macro cell type {}",
+                netlistdb.pinnames[pinid].dbg_fmt_pin(), celltype));
+            let o = self.add_aigpin(DriverType::Macro(cellid, slot as u32));
+            self.pin2aigpin_iv[pinid] = o << 1;
+            self.macros.entry(cellid)
+                .or_insert_with(|| MacroBlock::new(kind, cellid))
+                .set_output(slot, o);
+        }
         else if celltype == "CKLNQD" {
             let mut prev_cp = usize::MAX;
             let mut prev_en = usize::MAX;
@@ -447,8 +493,11 @@ impl AIG {
         };
 
         for cellid in 1..netlistdb.num_cells {
-            if !matches!(netlistdb.celltypes[cellid].as_str(),
-                         "DFF" | "DFFSR" | "$__RAMGEM_SYNC_") {
+            let ct = netlistdb.celltypes[cellid].as_str();
+            let is_seq_macro = MacroKind::from_celltype(ct)
+                .map_or(false, |k| k.is_sequential());
+            if !matches!(ct, "DFF" | "DFFSR" | "$__RAMGEM_SYNC_")
+                && !is_seq_macro {
                 continue
             }
             for pinid in netlistdb.cell2pin.iter_set(cellid) {
@@ -565,7 +614,52 @@ impl AIG {
                 }
                 *aig.srams.get_mut(&cellid).unwrap() = sram;
             }
+            else if let Some(kind) = MacroKind::from_celltype(
+                netlistdb.celltypes[cellid].as_str()
+            ) {
+                // Inputs are read here, after the DFS, so pin2aigpin_iv is
+                // populated -- the same staging DFF and RAMBlock use.
+                let mut comb_in_iv = Vec::new();
+                let mut seq_in_iv = Vec::new();
+                let mut clk_en_iv = 0;
+                for pinid in netlistdb.cell2pin.iter_set(cellid) {
+                    if netlistdb.pindirect[pinid] != Direction::I { continue }
+                    let name = netlistdb.pinnames[pinid].1.as_str();
+                    if name == "CLK" {
+                        clk_en_iv = aig.trace_clock_pin(
+                            netlistdb, pinid, false, false
+                        ).unwrap();
+                        continue
+                    }
+                    let pin_iv = aig.pin2aigpin_iv[pinid];
+                    if kind.is_comb_input(name) { comb_in_iv.push(pin_iv); }
+                    else if kind.is_seq_input(name) { seq_in_iv.push(pin_iv); }
+                }
+                let mb = aig.macros.entry(cellid)
+                    .or_insert_with(|| MacroBlock::new(kind, cellid));
+                mb.comb_in_iv = comb_in_iv;
+                mb.seq_in_iv = seq_in_iv;
+                mb.clk_en_iv = clk_en_iv;
+            }
         }
+
+        aig.seq_macro_ids = aig.macros.iter()
+            .filter(|(_, mb)| mb.is_sequential())
+            .map(|(&cellid, _)| cellid)
+            .collect();
+
+        // A combinational macro sits inside the cone, so its consumers must
+        // be reachable from its inputs. Collected up front as owned pairs so
+        // the CSR loops below never borrow aig.macros while mutating
+        // aig.fanouts_start.
+        let macro_edges: Vec<(usize, usize)> = aig.drivers.iter().enumerate()
+            .filter_map(|(u, d)| match d {
+                DriverType::Macro(cellid, _) =>
+                    aig.macros.get(cellid).map(|mb| (u, mb)),
+                _ => None,
+            })
+            .flat_map(|(u, mb)| mb.comb_inputs().into_iter().map(move |i| (i, u)))
+            .collect();
 
         aig.fanouts_start = vec![0; aig.num_aigpins + 2];
         for (_i, driver) in aig.drivers.iter().enumerate() {
@@ -577,6 +671,9 @@ impl AIG {
                     aig.fanouts_start[b >> 1] += 1;
                 }
             }
+        }
+        for &(i, _) in &macro_edges {
+            aig.fanouts_start[i] += 1;
         }
         for i in 1..aig.num_aigpins + 2 {
             aig.fanouts_start[i] += aig.fanouts_start[i - 1];
@@ -597,6 +694,12 @@ impl AIG {
             }
         }
 
+        for &(i, u) in &macro_edges {
+            let st = aig.fanouts_start[i] - 1;
+            aig.fanouts_start[i] = st;
+            aig.fanouts[st] = u;
+        }
+
         aig
     }
 
@@ -612,14 +715,28 @@ impl AIG {
                 return
             }
             vis.insert(u);
-            if let DriverType::AndGate(a, b) = aig.drivers[u] {
-                if is_primary_input.map(|s| s.contains(&u)) != Some(true) {
-                    if (a >> 1) != 0 {
-                        dfs_topo(aig, vis, ret, is_primary_input, a >> 1);
-                    }
-                    if (b >> 1) != 0 {
-                        dfs_topo(aig, vis, ret, is_primary_input, b >> 1);
-                    }
+            if is_primary_input.map(|s| s.contains(&u)) != Some(true) {
+                match aig.drivers[u] {
+                    DriverType::AndGate(a, b) => {
+                        if (a >> 1) != 0 {
+                            dfs_topo(aig, vis, ret, is_primary_input, a >> 1);
+                        }
+                        if (b >> 1) != 0 {
+                            dfs_topo(aig, vis, ret, is_primary_input, b >> 1);
+                        }
+                    },
+                    // CARRY4, and an SRLC32E read address, are combinational:
+                    // recurse so levels and cuts account for their fan-in.
+                    // A DSP has no comb_inputs(), so this is a no-op for it and
+                    // its P output correctly terminates the cone like a DFF Q.
+                    DriverType::Macro(cellid, _) => {
+                        if let Some(mb) = aig.macros.get(&cellid) {
+                            for i in mb.comb_inputs() {
+                                dfs_topo(aig, vis, ret, is_primary_input, i);
+                            }
+                        }
+                    },
+                    _ => {}
                 }
             }
             ret.push(u);
@@ -639,17 +756,25 @@ impl AIG {
 
     pub fn num_endpoint_groups(&self) -> usize {
         self.primary_outputs.len() + self.dffs.len() + self.srams.len()
+            + self.seq_macro_ids.len()
     }
 
     pub fn get_endpoint_group(&self, endpt_id: usize) -> EndpointGroup {
-        if endpt_id < self.primary_outputs.len() {
+        let n_po = self.primary_outputs.len();
+        let n_dff = self.dffs.len();
+        let n_sram = self.srams.len();
+        if endpt_id < n_po {
             EndpointGroup::PrimaryOutput(*self.primary_outputs.get_index(endpt_id).unwrap())
         }
-        else if endpt_id < self.primary_outputs.len() + self.dffs.len() {
-            EndpointGroup::DFF(&self.dffs[endpt_id - self.primary_outputs.len()])
+        else if endpt_id < n_po + n_dff {
+            EndpointGroup::DFF(&self.dffs[endpt_id - n_po])
+        }
+        else if endpt_id < n_po + n_dff + n_sram {
+            EndpointGroup::RAMBlock(&self.srams[endpt_id - n_po - n_dff])
         }
         else {
-            EndpointGroup::RAMBlock(&self.srams[endpt_id - self.primary_outputs.len() - self.dffs.len()])
+            let cellid = self.seq_macro_ids[endpt_id - n_po - n_dff - n_sram];
+            EndpointGroup::Macro(&self.macros[&cellid])
         }
     }
 }
