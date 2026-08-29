@@ -1,0 +1,34 @@
+# GEM synthesis step 2 -- logic synthesis to aigpdk, macros preserved.
+# Follows usage.md Step 2 (Yosys variant). Placeholders filled by run_synth.sh.
+#
+# Why the macros survive every pass below:
+#   synth -flatten  : a blackbox has no body, so there is nothing to flatten in
+#   abc -liberty    : blackbox instances are cone boundaries, like DFFs
+#   techmap         : no mapping rule matches an unknown blackbox
+#   opt_clean -purge: `keep` (set in step 1) stops it being swept as dead logic
+
+read_verilog -lib synth/gem_macros.v
+read_verilog -noautowire @OUT@/memory_mapped.v
+hierarchy -check -top @TOP@
+
+setattr -set keep 1 t:$__GEMDSP_ t:$__GEMCARRY4_ t:$__GEMSRL32_
+
+synth -flatten
+delete t:$print
+
+dfflibmap -liberty aigpdk/aigpdk_nomem.lib
+opt_clean -purge
+abc -liberty aigpdk/aigpdk_nomem.lib
+opt_clean -purge
+techmap
+abc -liberty aigpdk/aigpdk_nomem.lib
+opt_clean -purge
+
+stat
+
+# .gv is what GEM's Rust parser reads. -noattr because sverilogparse does not
+# want Yosys attribute comments.
+write_verilog -noattr @OUT@/gatelevel.gv
+# JSON as well: PS note 4 requires the scripts be compatible with Yosys 0.68
+# JSON netlist output, and it is far easier to grep than Verilog.
+write_json @OUT@/gatelevel.json
