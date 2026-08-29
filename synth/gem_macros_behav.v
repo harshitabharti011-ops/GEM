@@ -15,10 +15,11 @@ module \$__GEMDSP_ (CLK, A, B, C, D, USE_PREADD, MODE, P);
    output reg signed [47:0] P;
 
    // AREG/BREG/CREG/DREG/ADREG/MREG are all combinational (PS: set to 0).
-   // A + D is 28 bits, so M is 46 bits -- wider than the PS's 45-bit figure,
-   // which assumes the pre-adder is bypassed. 46 is the safe width.
-   wire signed [27:0] AD = USE_PREADD ? (A + D) : {A[26], A};
-   wire signed [45:0] M  = AD * B;
+   // AD is a 27-bit pre-adder output and WRAPS -- real DSP48E2 silicon has a
+   // 27-bit pre-adder, which is why the PS specifies a 45-bit product. Widening
+   // AD to 28 bits changes every result once the pre-adder overflows.
+   wire signed [26:0] AD = USE_PREADD ? (A + D) : A;
+   wire signed [44:0] M  = AD * B;
 
    initial P = 48'sd0;                       // PS note 3: registers init to zero
    always @(posedge CLK)                     // PS note 2: single global clock

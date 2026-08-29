@@ -38,6 +38,8 @@
 #define GEM_DSP_B_BITS     18
 #define GEM_DSP_C_BITS     48
 #define GEM_DSP_D_BITS     27
+#define GEM_DSP_AD_BITS    27   /* pre-adder output wraps here */
+#define GEM_DSP_M_BITS     45   /* 27 x 18 product             */
 #define GEM_DSP_P_BITS     48
 #define GEM_CARRY4_BITS     4
 #define GEM_SRL_DEPTH      32
@@ -82,10 +84,14 @@ GEM_HD int64_t gem_dsp48e2(uint64_t a_raw, uint64_t b_raw,
     const int64_t c = gem_sext(c_raw, GEM_DSP_C_BITS);
     const int64_t d = gem_sext(d_raw, GEM_DSP_D_BITS);
 
-    // A + D is 28-bit, so the product is 46-bit -- wider than the PS's 45,
-    // which assumes the pre-adder is bypassed. 46 is the safe bound.
-    const int64_t ad = use_preadd ? (a + d) : a;
-    const int64_t m  = ad * b;
+    // The pre-adder output AD is 27 bits and WRAPS -- it does not widen to 28.
+    // That is what real DSP48E2 silicon does (the pre-adder is a 27-bit
+    // adder), and it is exactly why the PS specifies a 45-bit product rather
+    // than 46. Letting A+D widen changes the result whenever the pre-adder
+    // overflows: A = D = 2^26-1 gives AD = -2 in hardware, not +134217726.
+    const int64_t ad = gem_sext(
+        (uint64_t)(use_preadd ? (a + d) : a), GEM_DSP_AD_BITS);
+    const int64_t m  = gem_sext((uint64_t)(ad * b), GEM_DSP_M_BITS);
 
     int64_t p;
     switch (mode) {

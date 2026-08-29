@@ -31,8 +31,10 @@ def wrap(v, bits):
 # --- A. DSP48E2 -------------------------------------------------------------
 def dsp48e2(a, b, c, d, use_preadd, mode, p_cur):
     A, B, C, D = sext(a, 27), sext(b, 18), sext(c, 48), sext(d, 27)
-    AD = (A + D) if use_preadd else A
-    M = AD * B
+    # AD is a 27-bit pre-adder output and wraps; that is why the PS says the
+    # product is 45 bits and not 46.
+    AD = wrap(A + D, 27) if use_preadd else A
+    M = wrap(AD * B, 45)
     if   mode == 0: P = C
     elif mode == 1: P = M
     else:           P = p_cur + M
@@ -78,6 +80,11 @@ def main():
         (A_MIN & MA, B_MIN & MB, 0, A_MIN & MD, 1, 1),
         (1, 1, 0, 0, 0, 2),
         (0, 0, 0, 0, 0, 2),
+        # pre-adder wrap: A = D = 2^26-1 truncates to -2
+        (A_MAX & MA, B_MAX & MB, 0, A_MAX & MD, 1, 1),
+        (A_MAX & MA, B_MIN & MB, 0, A_MAX & MD, 1, 2),
+        (A_MIN & MA, B_MAX & MB, 0, A_MIN & MD, 1, 1),
+        (A_MIN & MA, B_MIN & MB, 0, A_MIN & MD, 1, 2),
     ]
     rng = LCG(0x243F6A8885A308D3)
     idx = 0

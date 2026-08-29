@@ -40,6 +40,13 @@ int main() {
         {(uint64_t)A_MIN, (uint64_t)B_MIN, 0, (uint64_t)A_MIN, 1, 1},
         {1, 1, 0, 0, 0, 2},
         {0, 0, 0, 0, 0, 2},
+        // pre-adder WRAP: A = D = 2^26-1 sums to 2^27-2, which is -2 once the
+        // 27-bit pre-adder truncates it. A model that widens AD to 28 bits
+        // gets +134217726 here and every downstream value differs.
+        {(uint64_t)A_MAX, (uint64_t)B_MAX, 0, (uint64_t)A_MAX, 1, 1},
+        {(uint64_t)A_MAX, (uint64_t)B_MIN, 0, (uint64_t)A_MAX, 1, 2},
+        {(uint64_t)A_MIN, (uint64_t)B_MAX, 0, (uint64_t)A_MIN, 1, 1},
+        {(uint64_t)A_MIN, (uint64_t)B_MIN, 0, (uint64_t)A_MIN, 1, 2},
     };
     int idx = 0;
     for (const D &v : directed) {
