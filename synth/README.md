@@ -14,6 +14,7 @@ survive as single cells.
 | `gem_macros_behav.v` | Simulation-only bodies. Golden reference for deliverable C; `csrc/macros.cuh` must match it bit for bit. |
 | `step1_memory.ys` | usage.md step 1 + macro interception. |
 | `step2_logic.ys` | usage.md step 2, macros preserved through `synth`/`abc`/`techmap`/`opt_clean`. |
+| `setup_yosys.sh` | Installs/verifies a Yosys new enough for PS note 4. Distro packages are too old. |
 | `run_synth.sh` | Fills the `@DESIGN@`/`@TOP@`/`@OUT@` placeholders and runs both steps. |
 | `check_macros.sh` | Pass/fail gate: counts macro cells in the JSON. Non-zero exit if they were shredded. |
 
@@ -21,13 +22,24 @@ survive as single cells.
 
 Needs Yosys 0.68 (PS note 4). None of this needs a GPU.
 
+**Do not use the distro package.** Ubuntu 22.04 ships Yosys 0.13 and 24.04
+ships 0.33 -- both far below the 0.68 the PS mandates, and old enough that
+`read_verilog -sv` will choke on IEEE 1800-2012 constructs in the hidden
+benchmarks. This applies to Kaggle too, where `apt-get install yosys` looks
+like it worked and quietly leaves you on 0.33.
+
 ```sh
-# macOS
-brew install yosys && yosys -V
+./synth/setup_yosys.sh          # install a new-enough build, or say why not
+./synth/setup_yosys.sh --check  # verify only
+```
 
-# Linux / Kaggle
-apt-get install -y yosys        # or: oss-cad-suite, which ships a current build
+It prefers Homebrew on macOS and falls back to the YosysHQ oss-cad-suite
+nightly, the only prebuilt carrying a current Yosys on both macOS arm64 and
+Kaggle's linux-x64.
 
+Then run the flow:
+
+```sh
 ./synth/run_synth.sh synth/tests/macro_smoke.sv macro_smoke
 ```
 
