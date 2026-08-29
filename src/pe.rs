@@ -3,6 +3,7 @@
 //! Partition executor
 
 use crate::aig::{DriverType, AIG, EndpointGroup};
+use crate::macros::MacroKind;
 use crate::staging::StagedAIG;
 use indexmap::{IndexMap, IndexSet};
 use serde::{Deserialize, Serialize};
@@ -20,6 +21,19 @@ pub const BOOMERANG_NUM_STAGES: usize = 13;
 /// 8192-bit writeout capacity the flattener's permutation tables are sized for.
 pub const BOOMERANG_MAX_WRITEOUTS: usize = 1 << (BOOMERANG_NUM_STAGES - 5);
 
+/// One batch of same-kind macro evaluations.
+///
+/// Type-homogeneous by construction: every lane in a batch runs the same
+/// macro kind, so a warp never mixes a 48-bit multiply with an AND-tree
+/// reduction. Warp uniformity is a property of the data structure here, not
+/// something the kernel has to arrange.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MacroBatch {
+    pub kind: MacroKind,
+    /// netlistdb cell ids, in the order the flattener will lay them out.
+    pub cellids: Vec<usize>,
+}
+
 /// One Boomerang stage
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BoomerangStage {
@@ -32,6 +46,17 @@ pub struct BoomerangStage {
     /// the 32-packed elements in the hierarchy where there should be
     /// a pass-through.
     pub write_outs: Vec<usize>,
+    /// combinational macro evaluations to run AFTER this stage's boolean
+    /// hierarchy, grouped by kind.
+    ///
+    /// A CARRY4 cannot live inside the hierarchy -- that is a 13-level tree of
+    /// AND-gate reductions feeding the __shfl_down_sync chain, and a carry
+    /// chain is not an AND gate. So a combinational macro is a sub-stage
+    /// boundary: boolean hierarchy, then macro batches, then the next stage.
+    /// Sequential macros (DSP PREG, SRLC32E shift) are endpoints instead and
+    /// commit at writeout time, so they never appear here.
+    #[serde(default)]
+    pub macro_ops: Vec<MacroBatch>,
 }
 
 /// One partitioned block: a basic execution unit on GPU.
@@ -85,6 +110,25 @@ fn build_one_boomerang_stage(
     for (order_i, i) in order.iter().copied().enumerate() {
         if realized_inputs.contains(&i) { continue }
         let mut lvli: usize = 0;
+        // A macro node reaching here means the scheduling invariant broke: a
+        // combinational macro output must be in realized_inputs (already
+        // evaluated by an earlier stage's macro_ops) before anything can
+        // depend on it. Falling through would silently give it level 0 --
+        // treating it as an available input that nothing produces.
+        if let DriverType::Macro(cellid, slot) = aig.drivers[i] {
+            // A macro whose outputs are purely clocked (a DSP's P) is a
+            // level-0 leaf read from state, exactly like a DFF's Q -- fall
+            // through. One with combinational outputs reaching here means the
+            // scheduling invariant broke: it should have been evaluated by an
+            // earlier stage's macro_ops. Falling through would silently give
+            // it level 0, treating it as an input nothing produces.
+            if aig.macros.get(&cellid).map_or(false, |mb| mb.kind.has_comb_outputs()) {
+                panic!("unscheduled combinational macro node (cell {}, out \
+                        slot {}) in the boolean subgraph -- it must be \
+                        evaluated by a previous stage's macro_ops before its \
+                        outputs are used.", cellid, slot);
+            }
+        }
         if let DriverType::AndGate(a, b) = aig.drivers[i] {
             if a >= 2 {
                 lvli = lvli.max(level[*id2order.get(&(a >> 1)).unwrap()] + 1);
@@ -119,7 +163,8 @@ fn build_one_boomerang_stage(
         else {
             let (a, b) = match aig.drivers[nd] {
                 DriverType::AndGate(a, b) => (a, b),
-                _ => panic!()
+                ref d => panic!("place_bit: aigpin {} at its own level {} is \
+                                 driven by {:?}, not an AndGate", nd, hi, d)
             };
             let hier_hi_len = hier[hi].len();
             place_bit(aig, hier, hier_visited_nodes_count,
@@ -186,6 +231,20 @@ fn build_one_boomerang_stage(
                 continue
             }
             let rlvli = reverse_level[order_i];
+            // Defensive: the scheduling invariant should keep unscheduled
+            // macro nodes out of this subgraph entirely, but if one appears,
+            // propagate through its combinational fan-in rather than silently
+            // hiding the cone behind it from the scheduler.
+            if let DriverType::Macro(cellid, _) = aig.drivers[i] {
+                if let Some(mb) = aig.macros.get(&cellid) {
+                    for inp in mb.comb_inputs() {
+                        if let Some(&oi) = id2order.get(&inp) {
+                            let r = &mut reverse_level[oi];
+                            if *r == usize::MAX || *r < rlvli + 1 { *r = rlvli + 1; }
+                        }
+                    }
+                }
+            }
             if let DriverType::AndGate(a, b) = aig.drivers[i] {
                 if a >= 2 {
                     let a = *id2order.get(&(a >> 1)).unwrap();
@@ -243,7 +302,9 @@ fn build_one_boomerang_stage(
             else {
                 let (a, b) = match aig.drivers[order[order_i]] {
                     DriverType::AndGate(a, b) => (a, b),
-                    _ => panic!()
+                    ref d => panic!("lvl1_necessary: aigpin {} at level {} is \
+                                     driven by {:?}, not an AndGate",
+                                    order[order_i], level[order_i], d)
                 };
                 if a >= 2 &&
                     level[*id2order.get(&(a >> 1)).unwrap()] == 0 &&
@@ -498,7 +559,8 @@ fn build_one_boomerang_stage(
 
     Some(BoomerangStage {
         hier,
-        write_outs
+        write_outs,
+        macro_ops: Vec::new(),   // filled by Partition::build_one
     })
 }
 
@@ -571,14 +633,91 @@ impl Partition {
             // overflowed writeout
             return None
         }
+        // Discover the combinational macros this partition has to evaluate.
+        // A sequential macro is an endpoint and commits at writeout; a
+        // combinational one (CARRY4, or an SRLC32E read) sits inside the cone
+        // and has to be scheduled between boolean stages.
+        let mut pending_macros = IndexSet::<usize>::new();
+        {
+            let probe = aig.topo_traverse_generic(
+                Some(&unrealized_comb_outputs.iter().copied().collect()),
+                Some(&realized_inputs));
+            for &n in &probe {
+                if let DriverType::Macro(cellid, _) = aig.drivers[n] {
+                    match aig.macros.get(&cellid) {
+                        // CARRY4 and SRLC32E both need an in-cone op; a DSP
+                        // does not, because P is read from state.
+                        Some(mb) if mb.kind.has_comb_outputs() => {
+                            pending_macros.insert(cellid);
+                        },
+                        _ => {}
+                    }
+                }
+            }
+        }
+        // Their inputs become things the boolean hierarchy must realise; their
+        // outputs are produced by the macro op itself, so they are removed
+        // from the boolean work list -- no AND-gate cover can produce them.
+        for &cellid in pending_macros.iter() {
+            let mb = &aig.macros[&cellid];
+            for i in mb.comb_inputs() { unrealized_comb_outputs.insert(i); }
+            for &o in mb.outputs.iter() {
+                if o != 0 { unrealized_comb_outputs.swap_remove(&o); }
+            }
+        }
+
         let mut stages = Vec::<BoomerangStage>::new();
         let mut total_write_outs = 0;
-        while !unrealized_comb_outputs.is_empty() {
-            let stage = build_one_boomerang_stage(
-                aig, &mut unrealized_comb_outputs,
-                &mut realized_inputs, &mut total_write_outs,
-                num_reserved_writeouts
-            )?;
+        while !unrealized_comb_outputs.is_empty() || !pending_macros.is_empty() {
+            let mut stage = if unrealized_comb_outputs.is_empty() {
+                // Nothing boolean left, but macros still need somewhere to
+                // run: emit a hierarchy-free stage to carry them.
+                let mut hier = Vec::new();
+                for i in 0..=BOOMERANG_NUM_STAGES {
+                    hier.push(vec![usize::MAX; 1 << (BOOMERANG_NUM_STAGES - i)]);
+                }
+                BoomerangStage { hier, write_outs: Vec::new(), macro_ops: Vec::new() }
+            }
+            else {
+                build_one_boomerang_stage(
+                    aig, &mut unrealized_comb_outputs,
+                    &mut realized_inputs, &mut total_write_outs,
+                    num_reserved_writeouts
+                )?
+            };
+
+            // Every macro whose combinational fan-in is now realised can run
+            // at the end of this stage. Grouped by kind so each batch is
+            // warp-uniform.
+            let ready: Vec<usize> = pending_macros.iter().copied()
+                .filter(|c| aig.macros[c].comb_inputs().iter()
+                            .all(|i| realized_inputs.contains(i)))
+                .collect();
+            if !ready.is_empty() {
+                let mut by_kind = IndexMap::<MacroKind, Vec<usize>>::new();
+                for &c in &ready {
+                    by_kind.entry(aig.macros[&c].kind).or_default().push(c);
+                }
+                stage.macro_ops = by_kind.into_iter()
+                    .map(|(kind, cellids)| MacroBatch { kind, cellids })
+                    .collect();
+                for c in ready {
+                    pending_macros.swap_remove(&c);
+                    for &o in aig.macros[&c].outputs.iter() {
+                        if o != 0 { realized_inputs.insert(o); }
+                    }
+                }
+            }
+            else if unrealized_comb_outputs.is_empty() {
+                // No boolean work left and nothing became ready: the remaining
+                // macros depend on values this partition never produces.
+                clilog::error!(
+                    "partition stalled with {} macro(s) whose inputs are \
+                     unreachable: {:?}",
+                    pending_macros.len(),
+                    pending_macros.iter().copied().collect::<Vec<_>>());
+                return None
+            }
             stages.push(stage);
         }
         Some(Partition {

@@ -22,13 +22,14 @@
 // on it this instant) or sequential (consumed at the edge). The traversal in
 // aig.rs recurses through the first set and stops at the second.
 
+use serde::{Serialize, Deserialize};
 use crate::aigpdk::{
     GEMDSP_CELL, GEMCARRY4_CELL, GEMSRL32_CELL,
     GEMDSP_A_WIDTH, GEMDSP_B_WIDTH, GEMDSP_C_WIDTH, GEMDSP_D_WIDTH,
     GEMDSP_P_WIDTH, GEMDSP_MODE_WIDTH, GEMCARRY4_WIDTH, GEMSRL32_ADDR_WIDTH,
 };
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum MacroKind { Dsp48e2, Carry4, Srlc32e }
 
 impl MacroKind {
@@ -143,6 +144,23 @@ impl MacroKind {
             Some((name, _)) => self.is_comb_input(name),
             None => false,
         }
+    }
+
+    /// Do this kind's outputs have to be evaluated inside the combinational
+    /// cone, rather than read from state at the start of the cycle?
+    ///
+    /// This is NOT the same question as `is_sequential`:
+    ///   CARRY4  stateless, combinational outputs      -> true
+    ///   SRLC32E stateful,  Q = state[A] reads through A -> true
+    ///   DSP48E2 stateful,  P is purely clocked        -> false
+    /// A DSP's P therefore behaves exactly like a DFF's Q: a level-0 leaf read
+    /// from state. Deciding this from `is_sequential` would misclassify both
+    /// the SRL and the DSP, in opposite directions.
+    ///
+    /// Static, so an instance whose inputs happen to be tied to constants is
+    /// still classified by its kind.
+    pub fn has_comb_outputs(self) -> bool {
+        (0..self.num_inputs()).any(|slot| self.is_comb_slot(slot))
     }
 
     /// Is this input pin one the outputs depend on combinationally?
@@ -328,6 +346,35 @@ mod canonical_order_tests {
             assert_eq!(fwd.in_iv, rev.in_iv, "{:?}: in_iv depends on visit order", k);
             assert_eq!(fwd.in_iv.len(), k.num_inputs());
         }
+    }
+
+    /// The classifier that decides whether a macro needs an in-cone
+    /// evaluation op. Getting this from is_sequential() misclassifies the SRL
+    /// and the DSP in opposite directions, so it is pinned here.
+    #[test]
+    fn has_comb_outputs_is_not_is_sequential() {
+        assert!(MacroKind::Carry4.has_comb_outputs());
+        assert!(MacroKind::Srlc32e.has_comb_outputs(),
+                "Q = state[A] reads combinationally through A[4:0]");
+        assert!(!MacroKind::Dsp48e2.has_comb_outputs(),
+                "P is purely clocked -- a level-0 leaf like a DFF's Q");
+
+        // The two predicates genuinely disagree, in both directions.
+        assert!(MacroKind::Carry4.has_comb_outputs()
+                != MacroKind::Carry4.is_sequential());
+        assert!(MacroKind::Dsp48e2.has_comb_outputs()
+                != MacroKind::Dsp48e2.is_sequential());
+        assert_eq!(MacroKind::Srlc32e.has_comb_outputs(),
+                   MacroKind::Srlc32e.is_sequential());
+    }
+
+    /// A CARRY4 with every input tied to a constant still needs evaluating,
+    /// so the classifier must be static and not derived from live fan-in.
+    #[test]
+    fn has_comb_outputs_is_static_not_instance_derived() {
+        let mb = MacroBlock::new(MacroKind::Carry4, 1);   // all inputs zero
+        assert!(mb.comb_inputs().is_empty(), "no live fan-in");
+        assert!(mb.kind.has_comb_outputs(), "but it still must be evaluated");
     }
 
     #[test]
