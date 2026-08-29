@@ -458,7 +458,7 @@ fn main() {
         }
     }
 
-    let script = FlattenedScriptV1::from(
+    let mut script = FlattenedScriptV1::from(
         &aig, &stageds.iter().map(|(_, _, staged)| staged).collect::<Vec<_>>(),
         &parts_in_stages.iter().map(|ps| ps.as_slice()).collect::<Vec<_>>(),
         args.num_blocks, input_layout
@@ -673,6 +673,31 @@ fn main() {
     let device = Device::CUDA(0);
     input_states_uvec.as_mut_uptr(device);
     let mut sram_storage = UVec::new_zeroed(script.sram_storage_size as usize, device);
+
+    // 64-bit macro word-state (deliverable A, second half).
+    //
+    // A separate UVec<u64> rather than a slice of the u32 bit-state: the
+    // element type gives 8-byte alignment, cudaMalloc gives a >=256-byte
+    // aligned base, and macro_layout groups instances by kind with each run
+    // padded to a warp -- so lane t of a batch reads word_state[base + t] and a
+    // warp covers one aligned 256-byte segment (2 sectors). Zero-initialised
+    // because PS note 3 requires all internal macro registers to start at zero.
+    let mut macro_word_state: UVec<u64> =
+        UVec::new_zeroed(script.macro_word_state_size as usize, device);
+    if script.macro_word_state_size > 0 {
+        let p = macro_word_state.as_mut_uptr(device) as usize;
+        assert_eq!(p % 8, 0, "macro word-state must be 64-bit aligned");
+        clilog::info!("macro word-state: {} u64 ({} bytes) at {:#x}, {} macros",
+                      script.macro_word_state_size,
+                      script.macro_layout.word_state_bytes(),
+                      p, script.macro_layout.slots.len());
+    }
+    // descriptors are read-only on the device; materialise them there now.
+    script.macro_descriptors.as_mut_uptr(device);
+    script.macro_desc_start.as_mut_uptr(device);
+    // Part B consumes macro_word_state in the kernel launch; keeping it live
+    // here so the allocation and its alignment check are exercised today.
+    let _ = &mut macro_word_state;
     device.synchronize();
     let timer_sim = clilog::stimer!("simulation");
     ucci::simulate_v1_noninteractive_simple_scan(

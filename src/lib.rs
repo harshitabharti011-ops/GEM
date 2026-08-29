@@ -4,6 +4,8 @@ pub mod aigpdk;
 
 pub mod macros;
 
+pub mod macro_layout;
+
 pub mod aig;
 
 pub mod staging;

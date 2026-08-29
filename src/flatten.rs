@@ -6,6 +6,7 @@ use crate::aig::{AIG, EndpointGroup, DriverType};
 use crate::aigpdk::AIGPDK_SRAM_ADDR_WIDTH;
 use crate::pe::{Partition, BOOMERANG_NUM_STAGES};
 use crate::staging::StagedAIG;
+use crate::macro_layout::{MacroIo, MacroLayout, NO_BIT};
 use indexmap::IndexMap;
 use std::collections::BTreeMap;
 use ulib::UVec;
@@ -94,6 +95,18 @@ pub struct FlattenedScriptV1 {
     pub reg_io_state_size: u32,
     /// the u32 array length for storing SRAMs.
     pub sram_storage_size: u32,
+    /// length of the 64-bit macro word-state region, in u64 elements.
+    ///
+    /// Allocate as `UVec<u64>` -- the element type gives 8-byte alignment and
+    /// cudaMalloc gives a 256-byte aligned base, so the PS's 64-bit alignment
+    /// requirement holds structurally rather than by assertion.
+    pub macro_word_state_size: u32,
+    /// placement and PACK/UNPACK descriptors for every macro instance.
+    pub macro_layout: MacroLayout,
+    /// `macro_layout.descriptors`, device-resident.
+    pub macro_descriptors: UVec<u32>,
+    /// `macro_layout.desc_start`, device-resident CSR offsets.
+    pub macro_desc_start: UVec<usize>,
     /// expected input AIG pins layout
     pub input_layout: Vec<usize>,
     /// maps from primary outputs, FF:D and SRAM:PORT_R_RD_DATA AIG pins
@@ -168,6 +181,10 @@ struct FlatteningPart {
     after_writeout_pin2pos: IndexMap<usize, u16>,
     /// the number of SRAMs to simulate in this part.
     num_srams: u32,
+    /// u32 writeout slots reserved for macro outputs in this part.
+    num_macro_slots: u32,
+    /// per-macro bit-state mapping, handed to the memory formatter.
+    macro_ios: Vec<MacroIo>,
     /// number of normal writeouts
     num_normal_writeouts: u32,
     /// number of writeout slots for output duplication
@@ -259,6 +276,27 @@ impl FlatteningPart {
                 EndpointGroup::RAMBlock(_) => {
                     self.num_srams += 1;
                 },
+                EndpointGroup::Macro(mb) => {
+                    // One u32 slot per 32 output bits: a DSP's P[47:0] takes 2,
+                    // an SRLC32E's Q/Q31 takes 1.
+                    self.num_macro_slots +=
+                        ((mb.kind.num_outputs() + 31) / 32) as u32;
+                    // Register the inputs exactly as a DFF's D is registered.
+                    // make_inputs_outputs will place these through
+                    // get_or_place_output_with_activation, so if they are not
+                    // counted here the duplicate-writeout total disagrees and
+                    // the assert at the end of that function fires.
+                    for &in_iv in mb.seq_in_iv.iter().chain(mb.comb_in_iv.iter()) {
+                        if in_iv <= 1 || in_iv == usize::MAX { continue }
+                        comb_outputs_activations.entry(in_iv >> 1)
+                            .or_default().insert(
+                                mb.clk_en_iv << 1 | (in_iv & 1), None);
+                    }
+                    if mb.clk_en_iv > 1 {
+                        comb_outputs_activations.entry(mb.clk_en_iv >> 1)
+                            .or_default().insert(2 | (mb.clk_en_iv & 1), None);
+                    }
+                },
                 EndpointGroup::PrimaryOutput(idx) => {
                     comb_outputs_activations.entry(idx >> 1)
                         .or_default().insert(2 | (idx & 1), None);
@@ -281,7 +319,10 @@ impl FlatteningPart {
                 + 31) / 32) as u32;
         self.comb_outputs_activations = comb_outputs_activations;
 
-        self.num_writeouts = self.num_normal_writeouts + self.num_srams + self.num_duplicate_writeouts;
+        // Writeout block order: normal | duplicate | macro | sram.
+        // SRAMs stay last so their existing offset arithmetic is untouched.
+        self.num_writeouts = self.num_normal_writeouts + self.num_srams
+            + self.num_duplicate_writeouts + self.num_macro_slots;
 
         self.after_writeout_pin2pos = self.parts_after_writeouts.iter().enumerate()
             .filter_map(|(i, &pin)| {
@@ -349,7 +390,7 @@ impl FlatteningPart {
         }
         else {
             self.cnt_placed_duplicate_permute += 1;
-            let dup_pos = ((self.num_writeouts - self.num_srams) * 32 - self.cnt_placed_duplicate_permute) as usize;
+            let dup_pos = ((self.num_writeouts - self.num_srams - self.num_macro_slots) * 32 - self.cnt_placed_duplicate_permute) as usize;
             let dup_perm_pos = ((self.num_srams * 4 + self.num_duplicate_writeouts) * 32 - self.cnt_placed_duplicate_permute) as usize;
             if dup_perm_pos >= 8192 {
                 panic!("sram duplicate bit larger than expected..")
@@ -387,6 +428,7 @@ impl FlatteningPart {
         self.cnt_placed_duplicate_permute = 0;
 
         let mut cur_sram_id = 0;
+        let mut cur_macro_slot = 0u32;
         for &endpt_i in &part.endpoints {
             match staged.get_endpoint_group(aig, endpt_i) {
                 EndpointGroup::RAMBlock(ram) => {
@@ -444,6 +486,50 @@ impl FlatteningPart {
                     ) as u32;
                     staged_io_map.insert(idx, pos);
                 },
+                EndpointGroup::Macro(mb) => {
+                    // Outputs occupy this part's macro block, which sits just
+                    // before the SRAM block. Bit b of the macro lands at
+                    // macro_start*32 + b, so a whole macro is contiguous in the
+                    // bit-state and its base is 32-bit aligned by construction.
+                    let n_slots = ((mb.kind.num_outputs() + 31) / 32) as u32;
+                    let macro_start = self.state_start + self.num_writeouts
+                        - self.num_srams - self.num_macro_slots + cur_macro_slot;
+                    let mut out_bit_pos = vec![NO_BIT; mb.kind.num_outputs()];
+                    for (b, &o) in mb.outputs.iter().enumerate() {
+                        if o == 0 || o == usize::MAX { continue }
+                        let pos = macro_start * 32 + b as u32;
+                        out_bit_pos[b] = pos;
+                        // downstream logic reads the macro's outputs
+                        input_map.insert(o, pos);
+                        output_map.insert(o << 1, pos);
+                    }
+                    // Inputs are ordinary combinational results this part must
+                    // produce, exactly like a DFF's D. Route them through the
+                    // existing activation machinery so polarity and clock-enable
+                    // duplication are handled the same way.
+                    let mut in_bit_pos = Vec::with_capacity(
+                        mb.seq_in_iv.len() + mb.comb_in_iv.len());
+                    for &in_iv in mb.seq_in_iv.iter().chain(mb.comb_in_iv.iter()) {
+                        if in_iv <= 1 || in_iv == usize::MAX {
+                            in_bit_pos.push(NO_BIT);
+                            continue
+                        }
+                        let pos = self.state_start * 32
+                            + self.get_or_place_output_with_activation(
+                                in_iv, mb.clk_en_iv) as u32;
+                        output_map.insert(in_iv, pos);
+                        in_bit_pos.push(pos);
+                    }
+                    let clk_en_pos = if mb.clk_en_iv <= 1 { NO_BIT }
+                        else { self.state_start * 32
+                               + self.get_or_place_output_with_activation(
+                                   mb.clk_en_iv, 1) as u32 };
+                    self.macro_ios.push(MacroIo {
+                        cellid: mb.cellid, kind: mb.kind,
+                        in_bit_pos, out_bit_pos, clk_en_pos,
+                    });
+                    cur_macro_slot += n_slots;
+                },
                 EndpointGroup::DFF(dff) => {
                     if dff.d_iv == 0 {
                         clilog::warn!(DFF_CONST_ERR, "dff d_iv has zero, not fully optimized netlist. ignoring the error..");
@@ -459,6 +545,7 @@ impl FlatteningPart {
             }
         }
         assert_eq!(cur_sram_id, self.num_srams);
+        assert_eq!(cur_macro_slot, self.num_macro_slots);
         assert_eq!((self.cnt_placed_duplicate_permute + 31) / 32, self.num_duplicate_writeouts);
 
         // println!("test clken_permute: {:?}, wos (w/o sram or dup): {:?}", self.clken_permute, self.parts_after_writeouts);
@@ -828,6 +915,16 @@ fn build_flattened_script_v1(
     blocks_start.push(blocks_data.len());
     blocks_data.extend((0..NUM_THREADS_V1 * 8).map(|_| 0)); // padding
 
+    // Host-side memory formatting for the macros: group by kind, pad each run
+    // to a warp, and emit the PACK/UNPACK descriptors.
+    let macro_ios: Vec<MacroIo> = stages_flattening_parts.iter()
+        .flat_map(|parts| parts.iter().flat_map(|p| p.macro_ios.iter().cloned()))
+        .collect();
+    let macro_layout = MacroLayout::build(&macro_ios);
+    clilog::info!("Macro word-state: {} u64 ({} bytes, 64-bit aligned), {} macros, {} descriptor words",
+                  macro_layout.word_state_size, macro_layout.word_state_bytes(),
+                  macro_layout.slots.len(), macro_layout.descriptors.len());
+
     clilog::info!("Built script for {} blocks, reg/io state size {}, sram size {}, script size {}",
                   num_blocks, sum_state_start, sum_srams_start, blocks_data.len());
 
@@ -838,6 +935,10 @@ fn build_flattened_script_v1(
         blocks_data: blocks_data.into(),
         reg_io_state_size: sum_state_start,
         sram_storage_size: sum_srams_start,
+        macro_word_state_size: macro_layout.word_state_size as u32,
+        macro_descriptors: macro_layout.descriptors.clone().into(),
+        macro_desc_start: macro_layout.desc_start.clone().into(),
+        macro_layout,
         input_layout,
         input_map,
         output_map,

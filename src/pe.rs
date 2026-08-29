@@ -533,6 +533,23 @@ impl Partition {
                 EndpointGroup::StagedIOPin(pin) => {
                     comb_outputs_activations.entry(pin).or_default().insert(2);
                 },
+                EndpointGroup::Macro(mb) => {
+                    // Cost the macro's inputs the same way a DFF's D is costed,
+                    // so this budget matches what the flattener will actually
+                    // place. Without it a partition looks cheaper here than it
+                    // turns out to be, and the overflow surfaces much later as
+                    // an assert inside make_inputs_outputs.
+                    for &in_iv in mb.seq_in_iv.iter().chain(mb.comb_in_iv.iter()) {
+                        if in_iv <= 1 || in_iv == usize::MAX { continue }
+                        comb_outputs_activations.entry(in_iv >> 1)
+                            .or_default().insert(mb.clk_en_iv << 1 | (in_iv & 1));
+                    }
+                    if mb.clk_en_iv > 1 {
+                        comb_outputs_activations.entry(mb.clk_en_iv >> 1)
+                            .or_default().insert(2 | (mb.clk_en_iv & 1));
+                    }
+                    // Batching macros into boomerang stages remains Part B.
+                },
             }
         }
         let num_output_dups = comb_outputs_activations.iter()
