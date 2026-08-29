@@ -110,7 +110,7 @@ pub enum DriverType {
     /// Driven by a word-level macro: (cell id, output slot).
     ///
     /// Unlike SRAM this MAY have combinational fan-in -- a CARRY4 sits inside
-    /// the cone. The fan-in lives in `MacroBlock::comb_in_iv` rather than in
+    /// the cone. The fan-in lives in `MacroBlock::in_iv` rather than in
     /// the variant, because it is variable length and resolved in a later
     /// pass. `topo_traverse_generic` recurses through it.
     Macro(usize, u32),
@@ -619,8 +619,10 @@ impl AIG {
             ) {
                 // Inputs are read here, after the DFS, so pin2aigpin_iv is
                 // populated -- the same staging DFF and RAMBlock use.
-                let mut comb_in_iv = Vec::new();
-                let mut seq_in_iv = Vec::new();
+                // Placed by canonical slot, so the operand order in the
+                // descriptors is a property of the macro interface and not of
+                // whatever order Yosys happened to emit the instance's pins.
+                let mut in_iv = vec![0usize; kind.num_inputs()];
                 let mut clk_en_iv = 0;
                 for pinid in netlistdb.cell2pin.iter_set(cellid) {
                     if netlistdb.pindirect[pinid] != Direction::I { continue }
@@ -631,14 +633,17 @@ impl AIG {
                         ).unwrap();
                         continue
                     }
-                    let pin_iv = aig.pin2aigpin_iv[pinid];
-                    if kind.is_comb_input(name) { comb_in_iv.push(pin_iv); }
-                    else if kind.is_seq_input(name) { seq_in_iv.push(pin_iv); }
+                    let bit = netlistdb.pinnames[pinid].2.map(|b| b as isize);
+                    match kind.input_slot(name, bit) {
+                        Some(slot) => in_iv[slot] = aig.pin2aigpin_iv[pinid],
+                        None => panic!(
+                            "unexpected input pin {} on macro cell type {:?}",
+                            netlistdb.pinnames[pinid].dbg_fmt_pin(), kind),
+                    }
                 }
                 let mb = aig.macros.entry(cellid)
                     .or_insert_with(|| MacroBlock::new(kind, cellid));
-                mb.comb_in_iv = comb_in_iv;
-                mb.seq_in_iv = seq_in_iv;
+                mb.in_iv = in_iv;
                 mb.clk_en_iv = clk_en_iv;
             }
         }

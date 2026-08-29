@@ -162,6 +162,49 @@ impl MacroLayout {
 
 fn round_up(v: usize, m: usize) -> usize { (v + m - 1) / m * m }
 
+// ---------------------------------------------------------------------------
+// Partition capacity model
+//
+// A boomerang partition holds BOOMERANG_MAX_WRITEOUTS (256) u32 writeout slots
+// = 8192 bits. Every macro spends some of that, and the numbers are worth
+// stating explicitly because the intuitive estimate is wrong in both
+// directions.
+//
+// What a macro actually costs a partition:
+//
+//   * OUTPUT slots -- ceil(num_outputs / 32) u32 slots, reserved outright.
+//     A DSP48E2 takes 2, a CARRY4 or SRLC32E takes 1.
+//
+//   * INPUT bits -- every input bit must be a realised combinational result,
+//     i.e. present in the partition's normal writeouts. A DSP48E2 needs 123.
+//
+//   * DUPLICATE slots -- NOT one per input, which is the easy mistake. The
+//     first activation of a pin reuses that pin's existing writeout position
+//     and costs nothing. A duplicate is spent only when the same pin is
+//     consumed under a DIFFERENT (clock-enable, polarity) pair. Since all of a
+//     macro's inputs share one clk_en_iv, a pin feeding only this macro costs
+//     zero duplicates. Duplicates appear when a pin also feeds a DFF with a
+//     different enable, or feeds the macro at both polarities.
+// ---------------------------------------------------------------------------
+
+/// Writeout bits one instance of `kind` needs realised in a partition:
+/// its inputs, plus the output bits it reserves.
+pub fn writeout_bits(kind: MacroKind) -> usize {
+    kind.num_inputs() + round_up(kind.num_outputs(), 32)
+}
+
+/// u32 writeout slots reserved outright for one instance's outputs.
+pub fn writeout_slots(kind: MacroKind) -> usize {
+    (kind.num_outputs() + 31) / 32
+}
+
+/// Upper bound on instances of one kind in a single partition, ignoring all
+/// other logic. Real designs reach far fewer, because the partition also has
+/// to hold the combinational cone feeding the macros.
+pub fn max_per_partition(kind: MacroKind, capacity_slots: usize) -> usize {
+    (capacity_slots * 32) / writeout_bits(kind)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -241,6 +284,64 @@ mod tests {
         assert_eq!(&d[5..5 + n_in], &a.in_bit_pos[..]);
         assert_eq!(&d[5 + n_in..], &a.out_bit_pos[..]);
         assert_eq!(l.desc_start.len(), 2);
+    }
+
+    /// The 8192-bit writeout ceiling, stated in macro terms. These numbers go
+    /// in the report; if the layout changes and they move, that is a finding,
+    /// not a test to relax.
+    #[test]
+    fn partition_capacity_is_what_we_think_it_is() {
+        const CAP: usize = 256;                        // BOOMERANG_MAX_WRITEOUTS
+        assert_eq!(CAP * 32, 8192, "capacity in bits");
+
+        assert_eq!(MacroKind::Dsp48e2.num_inputs(), 123);
+        assert_eq!(writeout_slots(MacroKind::Dsp48e2), 2);
+        assert_eq!(writeout_bits(MacroKind::Dsp48e2), 123 + 64);
+        assert_eq!(max_per_partition(MacroKind::Dsp48e2, CAP), 43);
+
+        assert_eq!(MacroKind::Carry4.num_inputs(), 10);
+        assert_eq!(writeout_slots(MacroKind::Carry4), 1);
+        assert_eq!(max_per_partition(MacroKind::Carry4, CAP), 195);
+
+        assert_eq!(MacroKind::Srlc32e.num_inputs(), 7);
+        assert_eq!(writeout_slots(MacroKind::Srlc32e), 1);
+        // 7 input bits + one 32-bit output slot = 39; 8192 / 39 = 210.
+        assert_eq!(writeout_bits(MacroKind::Srlc32e), 39);
+        assert_eq!(max_per_partition(MacroKind::Srlc32e, CAP), 210);
+    }
+
+    /// A DSP does NOT cost one duplicate slot per input bit. All of its inputs
+    /// share one clock enable, so a pin feeding only this macro is a single
+    /// activation and reuses its existing writeout position.
+    #[test]
+    fn a_macros_own_inputs_are_one_activation_each() {
+        let k = MacroKind::Dsp48e2;
+        let clk_en = 42usize;
+        let activations: std::collections::HashSet<usize> =
+            (0..k.num_inputs()).map(|slot| {
+                let in_iv = (100 + slot) << 1;          // distinct pins, even polarity
+                clk_en << 1 | (in_iv & 1)               // the activation key
+            }).collect();
+        assert_eq!(activations.len(), 1,
+                   "distinct pins under one clock enable share one activation key, \
+                    so none of them is a duplicate");
+    }
+
+    /// Scaling behaviour across the DSP counts the stress test exercises.
+    #[test]
+    fn dsp_word_state_scales_and_stays_aligned() {
+        for n in [1usize, 8, 32, 43, 44, 128, 512] {
+            let ms: Vec<MacroIo> = (0..n)
+                .map(|i| io(i, MacroKind::Dsp48e2, MacroKind::Dsp48e2.num_inputs()))
+                .collect();
+            let l = MacroLayout::build(&ms);
+            assert_eq!(l.slots.len(), n);
+            assert_eq!(l.word_state_size, round_up(n, WARP), "n = {}", n);
+            assert_eq!(l.word_state_bytes() % 256, 0, "n = {}", n);
+            let (base, count) = l.kind_ranges[kind_code(MacroKind::Dsp48e2) as usize];
+            assert_eq!((base, count), (0, n));
+            assert_eq!(l.desc_start.len(), n + 1);
+        }
     }
 
     #[test]

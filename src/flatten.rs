@@ -4,7 +4,7 @@
 
 use crate::aig::{AIG, EndpointGroup, DriverType};
 use crate::aigpdk::AIGPDK_SRAM_ADDR_WIDTH;
-use crate::pe::{Partition, BOOMERANG_NUM_STAGES};
+use crate::pe::{Partition, BOOMERANG_NUM_STAGES, BOOMERANG_MAX_WRITEOUTS};
 use crate::staging::StagedAIG;
 use crate::macro_layout::{MacroIo, MacroLayout, NO_BIT};
 use indexmap::IndexMap;
@@ -286,7 +286,7 @@ impl FlatteningPart {
                     // get_or_place_output_with_activation, so if they are not
                     // counted here the duplicate-writeout total disagrees and
                     // the assert at the end of that function fires.
-                    for &in_iv in mb.seq_in_iv.iter().chain(mb.comb_in_iv.iter()) {
+                    for &in_iv in mb.in_iv.iter() {
                         if in_iv <= 1 || in_iv == usize::MAX { continue }
                         comb_outputs_activations.entry(in_iv >> 1)
                             .or_default().insert(
@@ -323,6 +323,19 @@ impl FlatteningPart {
         // SRAMs stay last so their existing offset arithmetic is untouched.
         self.num_writeouts = self.num_normal_writeouts + self.num_srams
             + self.num_duplicate_writeouts + self.num_macro_slots;
+
+        // Fail early and by name. Without this the overrun surfaces much later
+        // as an out-of-range permutation index or the "sram duplicate bit
+        // larger than expected" panic, neither of which mentions macros.
+        assert!(
+            (self.num_writeouts as usize) <= BOOMERANG_MAX_WRITEOUTS,
+            "partition needs {} writeout slots but a boomerang partition holds \
+             at most {} ({} normal + {} duplicate + {} macro + {} sram). \
+             The partitioner should have rejected this -- check that macro \
+             output slots are counted in pe.rs num_reserved_writeouts.",
+            self.num_writeouts, BOOMERANG_MAX_WRITEOUTS,
+            self.num_normal_writeouts, self.num_duplicate_writeouts,
+            self.num_macro_slots, self.num_srams);
 
         self.after_writeout_pin2pos = self.parts_after_writeouts.iter().enumerate()
             .filter_map(|(i, &pin)| {
@@ -508,8 +521,8 @@ impl FlatteningPart {
                     // existing activation machinery so polarity and clock-enable
                     // duplication are handled the same way.
                     let mut in_bit_pos = Vec::with_capacity(
-                        mb.seq_in_iv.len() + mb.comb_in_iv.len());
-                    for &in_iv in mb.seq_in_iv.iter().chain(mb.comb_in_iv.iter()) {
+                        mb.in_iv.len());
+                    for &in_iv in mb.in_iv.iter() {
                         if in_iv <= 1 || in_iv == usize::MAX {
                             in_bit_pos.push(NO_BIT);
                             continue

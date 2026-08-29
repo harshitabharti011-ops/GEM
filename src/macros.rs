@@ -22,7 +22,11 @@
 // on it this instant) or sequential (consumed at the edge). The traversal in
 // aig.rs recurses through the first set and stops at the second.
 
-use crate::aigpdk::{GEMDSP_CELL, GEMCARRY4_CELL, GEMSRL32_CELL};
+use crate::aigpdk::{
+    GEMDSP_CELL, GEMCARRY4_CELL, GEMSRL32_CELL,
+    GEMDSP_A_WIDTH, GEMDSP_B_WIDTH, GEMDSP_C_WIDTH, GEMDSP_D_WIDTH,
+    GEMDSP_P_WIDTH, GEMDSP_MODE_WIDTH, GEMCARRY4_WIDTH, GEMSRL32_ADDR_WIDTH,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MacroKind { Dsp48e2, Carry4, Srlc32e }
@@ -56,25 +60,88 @@ impl MacroKind {
     }
 
     pub fn num_outputs(self) -> usize {
+        self.output_ports().iter().map(|&(_, w)| w).sum()
+    }
+
+    /// Canonical INPUT port order, as declared in synth/gem_macros.v.
+    ///
+    /// This table is the single source of truth for operand ordering. Without
+    /// it, input order followed netlistdb's pin iteration, which depends on how
+    /// Yosys happened to emit the instance -- so two structurally identical
+    /// netlists could produce different descriptors and Part B would have no
+    /// way to tell operand A from operand B.
+    ///
+    /// CLK is absent on purpose: it is traced separately into `clk_en_iv`, not
+    /// treated as an operand.
+    pub fn input_ports(self) -> &'static [(&'static str, usize)] {
         match self {
-            MacroKind::Dsp48e2 => 48,       // P[47:0]
-            MacroKind::Carry4  => 8,        // CO[3:0] then O[3:0]
-            MacroKind::Srlc32e => 2,        // Q then Q31
+            MacroKind::Dsp48e2 => &[
+                ("A", GEMDSP_A_WIDTH), ("B", GEMDSP_B_WIDTH),
+                ("C", GEMDSP_C_WIDTH), ("D", GEMDSP_D_WIDTH),
+                ("USE_PREADD", 1), ("MODE", GEMDSP_MODE_WIDTH)],
+            MacroKind::Carry4 => &[
+                ("S", GEMCARRY4_WIDTH), ("DI", GEMCARRY4_WIDTH),
+                ("CIN", 1), ("CYINIT", 1)],
+            MacroKind::Srlc32e => &[
+                ("D", 1), ("CE", 1), ("A", GEMSRL32_ADDR_WIDTH)],
         }
     }
 
-    /// Flat output slot for a pin name and bit index, or None if not an output.
-    ///
-    /// The slot numbering here is the canonical order that flatten.rs will use
-    /// when it lays these out in the word-state region, so it must stay stable.
+    /// Canonical OUTPUT port order, as declared in synth/gem_macros.v.
+    pub fn output_ports(self) -> &'static [(&'static str, usize)] {
+        match self {
+            MacroKind::Dsp48e2 => &[("P", GEMDSP_P_WIDTH)],
+            MacroKind::Carry4  => &[("CO", GEMCARRY4_WIDTH), ("O", GEMCARRY4_WIDTH)],
+            MacroKind::Srlc32e => &[("Q", 1), ("Q31", 1)],
+        }
+    }
+
+    /// Total input bits across all ports.
+    pub fn num_inputs(self) -> usize {
+        self.input_ports().iter().map(|&(_, w)| w).sum()
+    }
+
+    fn slot_in(table: &'static [(&'static str, usize)],
+               pin: &str, bit: Option<isize>) -> Option<usize> {
+        let mut base = 0;
+        for &(name, w) in table {
+            if name == pin {
+                let b = match bit { Some(b) if b >= 0 => b as usize, None => 0, _ => return None };
+                return if b < w { Some(base + b) } else { None }
+            }
+            base += w;
+        }
+        None
+    }
+
+    /// Flat input slot for a pin name and bit index. Stable across netlists.
+    pub fn input_slot(self, pin: &str, bit: Option<isize>) -> Option<usize> {
+        Self::slot_in(self.input_ports(), pin, bit)
+    }
+
+    /// Flat output slot. The numbering flatten.rs and Part B both index by.
     pub fn output_slot(self, pin: &str, bit: Option<isize>) -> Option<usize> {
-        match (self, pin) {
-            (MacroKind::Dsp48e2, "P")   => bit.map(|b| b as usize),
-            (MacroKind::Carry4,  "CO")  => bit.map(|b| b as usize),
-            (MacroKind::Carry4,  "O")   => bit.map(|b| 4 + b as usize),
-            (MacroKind::Srlc32e, "Q")   => Some(0),
-            (MacroKind::Srlc32e, "Q31") => Some(1),
-            _ => None,
+        Self::slot_in(self.output_ports(), pin, bit)
+    }
+
+    /// The port a flat input slot belongs to, as (name, bit).
+    pub fn input_port_of_slot(self, slot: usize) -> Option<(&'static str, usize)> {
+        let mut base = 0;
+        for &(name, w) in self.input_ports() {
+            if slot < base + w { return Some((name, slot - base)) }
+            base += w;
+        }
+        None
+    }
+
+    /// Do the outputs depend on this input slot combinationally?
+    ///
+    /// Classification is per PORT, so it is a static property of the slot --
+    /// never of the netlist.
+    pub fn is_comb_slot(self, slot: usize) -> bool {
+        match self.input_port_of_slot(slot) {
+            Some((name, _)) => self.is_comb_input(name),
+            None => false,
         }
     }
 
@@ -89,16 +156,6 @@ impl MacroKind {
             MacroKind::Dsp48e2 => false,
         }
     }
-
-    /// Is this input pin consumed at the clock edge?
-    pub fn is_seq_input(self, pin: &str) -> bool {
-        match self {
-            MacroKind::Carry4  => false,
-            MacroKind::Srlc32e => matches!(pin, "D" | "CE"),
-            MacroKind::Dsp48e2 =>
-                matches!(pin, "A" | "B" | "C" | "D" | "MODE" | "USE_PREADD"),
-        }
-    }
 }
 
 /// One macro instance, with its AIG-level connectivity resolved.
@@ -111,10 +168,11 @@ pub struct MacroBlock {
     pub kind: MacroKind,
     /// netlistdb cell id, so diagnostics can name the instance.
     pub cellid: usize,
-    /// Inputs the outputs depend on this instant, iv-encoded.
-    pub comb_in_iv: Vec<usize>,
-    /// Inputs latched at the clock edge, iv-encoded.
-    pub seq_in_iv: Vec<usize>,
+    /// Inputs, iv-encoded (`aigpin << 1 | invert`), indexed by
+    /// `MacroKind::input_slot`. Length is always `kind.num_inputs()`, so the
+    /// ordering is canonical and independent of netlist pin iteration order.
+    /// Zero means tied low or unconnected.
+    pub in_iv: Vec<usize>,
     /// Clock enable, from `AIG::trace_clock_pin`. Zero for combinational
     /// macros, which have no clock pin.
     pub clk_en_iv: usize,
@@ -127,39 +185,170 @@ impl MacroBlock {
     pub fn new(kind: MacroKind, cellid: usize) -> Self {
         MacroBlock {
             kind, cellid,
-            comb_in_iv: Vec::new(),
-            seq_in_iv: Vec::new(),
+            in_iv: vec![0; kind.num_inputs()],
             clk_en_iv: 0,
             outputs: vec![0; kind.num_outputs()],
         }
     }
 
-    pub fn set_output(&mut self, slot: usize, aigpin: usize) {
-        self.outputs[slot] = aigpin;
-    }
+    pub fn set_input(&mut self, slot: usize, iv: usize) { self.in_iv[slot] = iv; }
+    pub fn set_output(&mut self, slot: usize, aigpin: usize) { self.outputs[slot] = aigpin; }
 
     /// Combinational fan-in as bare aigpin ids, skipping constants.
     ///
-    /// Returned as a Vec rather than taking a callback so that callers can
-    /// hold it while mutating other fields of the AIG -- the fanout CSR build
-    /// needs exactly that.
+    /// Returned as a Vec rather than taking a callback so callers can hold it
+    /// while mutating other fields of the AIG -- the fanout CSR build needs
+    /// exactly that.
     pub fn comb_inputs(&self) -> Vec<usize> {
-        self.comb_in_iv.iter().map(|iv| iv >> 1).filter(|&i| i >= 1).collect()
+        self.in_iv.iter().enumerate()
+            .filter(|&(slot, _)| self.kind.is_comb_slot(slot))
+            .map(|(_, iv)| iv >> 1)
+            .filter(|&i| i >= 1)
+            .collect()
     }
 
     /// Every input that must be realised for this macro to be clocked.
+    ///
+    /// Includes the combinational inputs: an SRL's read address is
+    /// combinational but still has to be available in the cycle the shift
+    /// commits.
     pub fn for_each_seq_input(&self, mut f: impl FnMut(usize)) {
-        for iv in &self.seq_in_iv {
-            if (iv >> 1) >= 1 { f(iv >> 1); }
-        }
-        // A stateful macro also needs its combinational inputs realised: the
-        // SRL read address is combinational but still has to be available in
-        // the cycle the shift commits.
-        for iv in &self.comb_in_iv {
+        for iv in &self.in_iv {
             if (iv >> 1) >= 1 { f(iv >> 1); }
         }
         if (self.clk_en_iv >> 1) >= 1 { f(self.clk_en_iv >> 1); }
     }
 
     pub fn is_sequential(&self) -> bool { self.kind.is_sequential() }
+}
+
+#[cfg(test)]
+mod canonical_order_tests {
+    use super::*;
+    use crate::aigpdk::*;
+
+    const KINDS: [MacroKind; 3] =
+        [MacroKind::Dsp48e2, MacroKind::Carry4, MacroKind::Srlc32e];
+
+    /// The port tables are the contract with synth/gem_macros.v. If a width
+    /// moves in one place it must move in the other.
+    #[test]
+    fn port_widths_match_the_aigpdk_constants() {
+        let k = MacroKind::Dsp48e2;
+        assert_eq!(k.input_slot("A", Some(0)), Some(0));
+        assert_eq!(k.num_inputs(),
+                   GEMDSP_A_WIDTH + GEMDSP_B_WIDTH + GEMDSP_C_WIDTH
+                   + GEMDSP_D_WIDTH + 1 + GEMDSP_MODE_WIDTH);
+        assert_eq!(k.num_outputs(), GEMDSP_P_WIDTH);
+        assert_eq!(MacroKind::Carry4.num_inputs(), 2 * GEMCARRY4_WIDTH + 2);
+        assert_eq!(MacroKind::Carry4.num_outputs(), 2 * GEMCARRY4_WIDTH);
+        assert_eq!(MacroKind::Srlc32e.num_inputs(), 2 + GEMSRL32_ADDR_WIDTH);
+        assert_eq!(MacroKind::Srlc32e.num_outputs(), 2);
+    }
+
+    /// Every input bit maps to exactly one slot and back again, with no gaps
+    /// and no collisions.
+    #[test]
+    fn input_slots_are_a_bijection() {
+        for k in KINDS {
+            let mut seen = vec![false; k.num_inputs()];
+            for &(name, w) in k.input_ports() {
+                for b in 0..w {
+                    let bit = if w == 1 { None } else { Some(b as isize) };
+                    let slot = k.input_slot(name, bit)
+                        .unwrap_or_else(|| panic!("{:?}.{}[{}] has no slot", k, name, b));
+                    assert!(!seen[slot], "{:?}: slot {} claimed twice", k, slot);
+                    seen[slot] = true;
+                    assert_eq!(k.input_port_of_slot(slot), Some((name, b)));
+                }
+            }
+            assert!(seen.iter().all(|&s| s), "{:?}: gap in slot numbering", k);
+            assert_eq!(k.input_slot("NOT_A_PIN", None), None);
+            assert_eq!(k.input_slot("CLK", None), None, "CLK is not an operand");
+        }
+    }
+
+    #[test]
+    fn output_slot_numbering_is_unchanged() {
+        // These indices are already baked into flatten.rs and will be baked
+        // into the Part B kernel. They must not drift.
+        assert_eq!(MacroKind::Dsp48e2.output_slot("P", Some(47)), Some(47));
+        assert_eq!(MacroKind::Carry4.output_slot("CO", Some(0)), Some(0));
+        assert_eq!(MacroKind::Carry4.output_slot("CO", Some(3)), Some(3));
+        assert_eq!(MacroKind::Carry4.output_slot("O", Some(0)), Some(4));
+        assert_eq!(MacroKind::Carry4.output_slot("O", Some(3)), Some(7));
+        assert_eq!(MacroKind::Srlc32e.output_slot("Q", None), Some(0));
+        assert_eq!(MacroKind::Srlc32e.output_slot("Q31", None), Some(1));
+        assert_eq!(MacroKind::Dsp48e2.output_slot("P", Some(48)), None);
+    }
+
+    /// comb/seq classification is a static property of the slot, so the
+    /// scheduler can never disagree with the formatter about it.
+    #[test]
+    fn comb_classification_is_per_port_and_slot_consistent() {
+        for k in KINDS {
+            for slot in 0..k.num_inputs() {
+                let (name, _) = k.input_port_of_slot(slot).unwrap();
+                assert_eq!(k.is_comb_slot(slot), k.is_comb_input(name));
+            }
+        }
+        // CARRY4 is wholly combinational; a DSP is wholly sequential; an SRL
+        // is combinational on its read address only.
+        assert!((0..MacroKind::Carry4.num_inputs())
+                .all(|s| MacroKind::Carry4.is_comb_slot(s)));
+        assert!((0..MacroKind::Dsp48e2.num_inputs())
+                .all(|s| !MacroKind::Dsp48e2.is_comb_slot(s)));
+        let srl = MacroKind::Srlc32e;
+        assert!(srl.is_comb_slot(srl.input_slot("A", Some(0)).unwrap()));
+        assert!(!srl.is_comb_slot(srl.input_slot("D", None).unwrap()));
+        assert!(!srl.is_comb_slot(srl.input_slot("CE", None).unwrap()));
+    }
+
+    /// The point of the whole exercise: filling a MacroBlock in one pin order
+    /// and in the reverse order must produce byte-identical in_iv.
+    #[test]
+    fn in_iv_is_independent_of_pin_visit_order() {
+        for k in KINDS {
+            let pins: Vec<(&str, Option<isize>)> = k.input_ports().iter()
+                .flat_map(|&(n, w)| (0..w).map(move |b|
+                    (n, if w == 1 { None } else { Some(b as isize) })))
+                .collect();
+
+            let fill = |order: Box<dyn Iterator<Item = &(&str, Option<isize>)>>| {
+                let mut mb = MacroBlock::new(k, 1);
+                for &(name, bit) in order {
+                    let slot = k.input_slot(name, bit).unwrap();
+                    // a value that depends only on the pin, never on visit order
+                    mb.set_input(slot, (slot + 1) << 1);
+                }
+                mb
+            };
+            let fwd = fill(Box::new(pins.iter()));
+            let rev = fill(Box::new(pins.iter().rev()));
+            assert_eq!(fwd.in_iv, rev.in_iv, "{:?}: in_iv depends on visit order", k);
+            assert_eq!(fwd.in_iv.len(), k.num_inputs());
+        }
+    }
+
+    #[test]
+    fn comb_inputs_reads_the_right_slots() {
+        let k = MacroKind::Srlc32e;
+        let mut mb = MacroBlock::new(k, 1);
+        for slot in 0..k.num_inputs() { mb.set_input(slot, (slot + 10) << 1); }
+        let comb = mb.comb_inputs();
+        let expect: Vec<usize> = (0..5)
+            .map(|b| k.input_slot("A", Some(b)).unwrap() + 10)
+            .collect();
+        assert_eq!(comb, expect, "only A[4:0] is combinational on an SRLC32E");
+
+        let c4 = MacroKind::Carry4;
+        let mut mb = MacroBlock::new(c4, 2);
+        for slot in 0..c4.num_inputs() { mb.set_input(slot, (slot + 10) << 1); }
+        assert_eq!(mb.comb_inputs().len(), c4.num_inputs(), "CARRY4 is all comb");
+
+        let dsp = MacroKind::Dsp48e2;
+        let mut mb = MacroBlock::new(dsp, 3);
+        for slot in 0..dsp.num_inputs() { mb.set_input(slot, (slot + 10) << 1); }
+        assert!(mb.comb_inputs().is_empty(), "a DSP has no comb fan-in");
+    }
 }

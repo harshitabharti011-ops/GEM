@@ -16,7 +16,9 @@ use rayon::prelude::*;
 /// `kernel width = (1 << BOOMERANG_NUM_STAGES)`.
 pub const BOOMERANG_NUM_STAGES: usize = 13;
 
-const BOOMERANG_MAX_WRITEOUTS: usize = 1 << (BOOMERANG_NUM_STAGES - 5);
+/// u32 writeout slots one partition may hold. 256 slots x 32 bits is the
+/// 8192-bit writeout capacity the flattener's permutation tables are sized for.
+pub const BOOMERANG_MAX_WRITEOUTS: usize = 1 << (BOOMERANG_NUM_STAGES - 5);
 
 /// One Boomerang stage
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -514,6 +516,7 @@ impl Partition {
         let mut realized_inputs = staged.primary_inputs.as_ref()
             .cloned().unwrap_or_default();
         let mut num_srams = 0;
+        let mut num_macro_slots = 0;
         let mut comb_outputs_activations = IndexMap::<usize, IndexSet<usize>>::new();
         for &endpt_i in endpoints {
             let edg = staged.get_endpoint_group(aig, endpt_i);
@@ -534,12 +537,17 @@ impl Partition {
                     comb_outputs_activations.entry(pin).or_default().insert(2);
                 },
                 EndpointGroup::Macro(mb) => {
+                    // Output slots: one u32 per 32 output bits. The flattener
+                    // reserves these, so if they are not counted here a
+                    // partition looks admissible and then overruns
+                    // BOOMERANG_MAX_WRITEOUTS inside make_inputs_outputs.
+                    num_macro_slots += (mb.kind.num_outputs() + 31) / 32;
                     // Cost the macro's inputs the same way a DFF's D is costed,
                     // so this budget matches what the flattener will actually
                     // place. Without it a partition looks cheaper here than it
                     // turns out to be, and the overflow surfaces much later as
                     // an assert inside make_inputs_outputs.
-                    for &in_iv in mb.seq_in_iv.iter().chain(mb.comb_in_iv.iter()) {
+                    for &in_iv in mb.in_iv.iter() {
                         if in_iv <= 1 || in_iv == usize::MAX { continue }
                         comb_outputs_activations.entry(in_iv >> 1)
                             .or_default().insert(mb.clk_en_iv << 1 | (in_iv & 1));
@@ -555,7 +563,8 @@ impl Partition {
         let num_output_dups = comb_outputs_activations.iter()
             .map(|(_, ckens)| ckens.len() - 1)
             .sum::<usize>();
-        let num_reserved_writeouts = num_srams + (num_output_dups + 31) / 32;
+        let num_reserved_writeouts =
+            num_srams + num_macro_slots + (num_output_dups + 31) / 32;
         if num_reserved_writeouts >= BOOMERANG_MAX_WRITEOUTS ||
             num_srams * 4 + num_output_dups > BOOMERANG_MAX_WRITEOUTS
         {
