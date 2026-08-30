@@ -69,10 +69,19 @@ int main() {
     report<1>("low occupancy",  p.multiProcessorCount);
     report<4>("medium",         p.multiProcessorCount);
     report<8>("high occupancy", p.multiProcessorCount);
-    printf("\nGEM's usage.md advises num_blocks = 2 x SMs = %d.\n",
-           2 * p.multiProcessorCount);
-    printf("That is only reachable while the kernel stays at or below\n"
-           "%d blocks/SM. If the macro phase pushes registers past that,\n"
-           "num_blocks must come down and the grid loses parallelism.\n", 2);
+    int bps = 0;
+    cudaOccupancyMaxActiveBlocksPerMultiprocessor(&bps, probe<1>, 256, 0);
+    const int advised = 2 * p.multiProcessorCount;
+    printf("\nGEM's usage.md advises num_blocks = 2 x SMs = %d.\n", advised);
+    printf("Headroom: %d / %d = %.1fx before the cooperative grid is the limit.\n",
+           bps * p.multiProcessorCount, advised,
+           (double)(bps * p.multiProcessorCount) / advised);
+    printf("\nCAVEAT: the three rows above are likely identical. This probe\n"
+           "kernel is too light to be register-limited, so blocks/SM is pinned\n"
+           "at the architectural ceiling (max threads per SM / 256) and\n"
+           "__launch_bounds__ changes nothing. The headroom figure is real; the\n"
+           "register sensitivity is NOT demonstrated here. Re-run this against\n"
+           "the real kernel once the macro phase exists -- cudaFuncGetAttributes\n"
+           "on simulate_v1_noninteractive_simple_scan is the number that matters.\n");
     return 0;
 }
