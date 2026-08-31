@@ -79,5 +79,22 @@ pub mod indexmap {
         pub fn insert(&mut self, v: T) -> bool { if self.0.contains(&v) { false } else { self.0.push(v); true } }
         pub fn contains(&self, v: &T) -> bool { self.0.contains(v) }
         pub fn get_index(&self, i: usize) -> Option<&T> { self.0.get(i) }
+        pub fn is_empty(&self) -> bool { self.0.is_empty() }
+        pub fn swap_remove(&mut self, v: &T) -> bool {
+            match self.0.iter().position(|x| x == v) {
+                Some(i) => { self.0.swap_remove(i); true },
+                None => false,
+            } }
         pub fn iter(&self) -> std::slice::Iter<'_, T> { self.0.iter() } }
+    impl<T: PartialEq + Copy> FromIterator<T> for IndexSet<T> {
+        fn from_iter<I: IntoIterator<Item = T>>(it: I) -> Self {
+            let mut s = IndexSet::new();
+            for v in it { s.insert(v); }
+            s } }
+    impl<T> IntoIterator for IndexSet<T> {
+        type Item = T; type IntoIter = std::vec::IntoIter<T>;
+        fn into_iter(self) -> Self::IntoIter { self.0.into_iter() } }
+    impl<'a, T> IntoIterator for &'a IndexSet<T> {
+        type Item = &'a T; type IntoIter = std::slice::Iter<'a, T>;
+        fn into_iter(self) -> Self::IntoIter { self.0.iter() } }
 }

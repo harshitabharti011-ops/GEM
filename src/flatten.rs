@@ -312,8 +312,16 @@ impl FlatteningPart {
                         .or_default().insert(2 | (idx & 1), None);
                 },
                 EndpointGroup::StagedIOPin(idx) => {
-                    comb_outputs_activations.entry(idx)
-                        .or_default().insert(2, None);
+                    // A combinational macro output crossing a major-stage
+                    // boundary is placed by the macro pass, not by the boolean
+                    // write-out machinery. Registering an activation for it
+                    // here would reserve a boomerang write-out slot that
+                    // nothing ever fills, and then demand a hierarchy position
+                    // that does not exist.
+                    if !aig.is_comb_macro_output(idx) {
+                        comb_outputs_activations.entry(idx)
+                            .or_default().insert(2, None);
+                    }
                 },
                 EndpointGroup::DFF(dff) => {
                     comb_outputs_activations.entry(dff.d_iv >> 1)
@@ -504,10 +512,27 @@ impl FlatteningPart {
                 if o == 0 || o == usize::MAX { continue }
                 let pos = macro_start * 32 + b as u32;
                 out_bit_pos[b] = pos;
-                // downstream logic, and the next sub-stage's global read,
-                // find the macro's results here
-                input_map.insert(o, pos);
                 output_map.insert(o << 1, pos);
+                // WHICH map matters, and the two are not interchangeable.
+                //
+                // A global read resolves through input_map first and only then
+                // through staged_io_map, and that choice decides which buffer
+                // the kernel reads: input_map means input_state -- LAST
+                // cycle's commit -- while staged_io_map sets the high bit and
+                // reads output_state, this cycle's, written by an earlier
+                // major stage.
+                //
+                // A DSP's P is clocked, so last cycle's value is exactly what
+                // a reader should see: input_map. A CARRY4's CO, or an SRL's
+                // Q, is produced by THIS cycle's macro phase, so a consumer --
+                // which macro staging has placed in a later major stage --
+                // must read output_state or it silently gets a cycle-old bit.
+                if mb.kind.has_comb_outputs() {
+                    staged_io_map.insert(o, pos);
+                }
+                else {
+                    input_map.insert(o, pos);
+                }
             }
             // Inputs are combinational results this part must produce, routed
             // through the existing activation machinery so polarity and
@@ -588,10 +613,25 @@ impl FlatteningPart {
                     if idx == 0 {
                         panic!("staged IO pin has zero..??")
                     }
-                    let pos = self.state_start * 32 + self.get_or_place_output_with_activation(
-                        idx << 1, 1
-                    ) as u32;
-                    staged_io_map.insert(idx, pos);
+                    // A combinational macro output already has a home: the
+                    // macro pass above placed it in this part's macro block
+                    // and registered it in staged_io_map. The boolean
+                    // write-out path never produced this pin, so asking it for
+                    // a position panics with a misleading "buggy boomerang".
+                    if aig.is_comb_macro_output(idx) {
+                        assert!(staged_io_map.contains_key(&idx),
+                                "staged IO pin {} is a combinational macro \
+                                 output but no macro in this partition placed \
+                                 it -- the stager and the memory formatter \
+                                 disagree about which partition owns that \
+                                 macro", idx);
+                    }
+                    else {
+                        let pos = self.state_start * 32
+                            + self.get_or_place_output_with_activation(
+                                idx << 1, 1) as u32;
+                        staged_io_map.insert(idx, pos);
+                    }
                 },
                 EndpointGroup::Macro(_) => {
                     // Placed by the unified pass before this loop.

@@ -596,7 +596,13 @@ impl Partition {
                     num_srams += 1;
                 },
                 EndpointGroup::StagedIOPin(pin) => {
-                    comb_outputs_activations.entry(pin).or_default().insert(2);
+                    // A combinational macro output crossing a major-stage
+                    // boundary costs a macro slot, not a boolean write-out, so
+                    // it must not be charged to the write-out budget here --
+                    // the macro accounting below already pays for it.
+                    if !aig.is_comb_macro_output(pin) {
+                        comb_outputs_activations.entry(pin).or_default().insert(2);
+                    }
                 },
                 EndpointGroup::Macro(mb) => {
                     // Output slots: one u32 per 32 output bits. The flattener

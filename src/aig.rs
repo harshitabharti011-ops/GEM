@@ -759,6 +759,21 @@ impl AIG {
         ret
     }
 
+    /// Is this aigpin driven by a macro that produces it combinationally?
+    ///
+    /// Such a pin is placed by the macro phase, inside the macro block of the
+    /// write-out region, and never gets a boolean boomerang write-out
+    /// position. Any path that would otherwise ask the boomerang machinery for
+    /// one -- a staged I/O pin at a major-stage boundary, above all -- has to
+    /// check here first, or it panics with a misleading "buggy boomerang".
+    pub fn is_comb_macro_output(&self, aigpin: usize) -> bool {
+        match self.drivers.get(aigpin) {
+            Some(&DriverType::Macro(cellid, _)) => self.macros.get(&cellid)
+                .map_or(false, |mb| mb.kind.has_comb_outputs()),
+            _ => false,
+        }
+    }
+
     pub fn num_endpoint_groups(&self) -> usize {
         self.primary_outputs.len() + self.dffs.len() + self.srams.len()
             + self.seq_macro_ids.len()

@@ -12,7 +12,7 @@ use crate::aig::*;
 use crate::macros::MacroKind;
 
 fn h(s: &str) -> HierName { HierName(s.to_string()) }
-fn db() -> NetlistDB {
+pub fn db() -> NetlistDB {
     let pn = |n: &str, b: Option<isize>| (h(n), n.to_string(), b);
     NetlistDB {
         num_pins: 14, num_cells: 3,
