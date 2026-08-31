@@ -107,6 +107,10 @@ fn main() {
     let device = Device::CUDA(0);
     let mut input_states_uvec = UVec::new_zeroed(script.reg_io_state_size as usize * (args.num_dummy_cycles + 1), device);
     let mut sram_storage = UVec::new_zeroed(script.sram_storage_size as usize, device);
+    // Macro buffers. This benchmark drives a synthetic script with no macros,
+    // so the word-state is empty; the kernel simply finds zero batches.
+    let mut macro_word_state: UVec<u64> =
+        UVec::new_zeroed(script.macro_word_state_size as usize, device);
     device.synchronize();
     let timer_sim = clilog::stimer!("simulation (warm up)");
     ucci::simulate_v1_noninteractive_simple_scan(
@@ -117,6 +121,9 @@ fn main() {
         args.num_dummy_cycles,
         script.reg_io_state_size as usize,
         &mut input_states_uvec,
+        &script.macro_descriptors,
+        &script.macro_desc_start,
+        &mut macro_word_state,
         device
     );
     device.synchronize();
@@ -130,6 +137,9 @@ fn main() {
         args.num_dummy_cycles,
         script.reg_io_state_size as usize,
         &mut input_states_uvec,
+        &script.macro_descriptors,
+        &script.macro_desc_start,
+        &mut macro_word_state,
         device
     );
     device.synchronize();

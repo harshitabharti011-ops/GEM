@@ -695,9 +695,6 @@ fn main() {
     // descriptors are read-only on the device; materialise them there now.
     script.macro_descriptors.as_mut_uptr(device);
     script.macro_desc_start.as_mut_uptr(device);
-    // Part B consumes macro_word_state in the kernel launch; keeping it live
-    // here so the allocation and its alignment check are exercised today.
-    let _ = &mut macro_word_state;
     device.synchronize();
     let timer_sim = clilog::stimer!("simulation");
     ucci::simulate_v1_noninteractive_simple_scan(
@@ -708,6 +705,9 @@ fn main() {
         offsets_timestamps.len(),
         script.reg_io_state_size as usize,
         &mut input_states_uvec,
+        &script.macro_descriptors,
+        &script.macro_desc_start,
+        &mut macro_word_state,
         device
     );
     device.synchronize();

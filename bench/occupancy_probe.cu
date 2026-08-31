@@ -76,6 +76,25 @@ int main() {
     printf("Headroom: %d / %d = %.1fx before the cooperative grid is the limit.\n",
            bps * p.multiProcessorCount, advised,
            (double)(bps * p.multiProcessorCount) / advised);
+    // The build pins -maxrregcount=128 (see build.rs), which is what actually
+    // determines GEM's occupancy -- not this toy kernel's 15 registers.
+    printf("\nGEM builds with -maxrregcount=128. At 256 threads that is\n");
+    for (int r = 32; r <= 128; r += 32) {
+        int b = p.regsPerMultiprocessor / (256 * r);
+        if (b > 8) b = 8;
+        printf("    %3d regs/thread -> %d blocks/SM -> max coop grid %4d%s\n",
+               r, b, b * p.multiProcessorCount,
+               (r == 128) ? "   <- the actual cap" : "");
+    }
+    printf("  so the real ceiling is %d, and usage.md advises %d. There is no\n"
+           "  headroom: they are the same number. And because maxrregcount\n"
+           "  CAPS registers rather than letting them grow, a heavy macro phase\n"
+           "  does not fail to launch -- it SPILLS to local memory and quietly\n"
+           "  gets slower. Watch l1tex__t_sectors_pipe_lsu_mem_local_op_ld.sum,\n"
+           "  not the launch status.\n",
+           (p.regsPerMultiprocessor / (256 * 128)) * p.multiProcessorCount,
+           2 * p.multiProcessorCount);
+
     printf("\nCAVEAT: the three rows above are likely identical. This probe\n"
            "kernel is too light to be register-limited, so blocks/SM is pinned\n"
            "at the architectural ceiling (max threads per SM / 256) and\n"

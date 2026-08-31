@@ -45,6 +45,16 @@
 #define GEM_SRL_DEPTH      32
 
 // ---------------------------------------------------------------------------
+// script/descriptor contract -- MUST match src/macro_layout.rs
+//   kind_code():  Dsp48e2 = 0, Srlc32e = 1, Carry4 = 2
+//   NO_BIT:       u32::MAX, an input tied low or an output nothing reads
+// ---------------------------------------------------------------------------
+#define GEM_KIND_DSP48E2  0u
+#define GEM_KIND_SRLC32E  1u
+#define GEM_KIND_CARRY4   2u
+#define GEM_NO_BIT        0xFFFFFFFFu
+
+// ---------------------------------------------------------------------------
 // sign extension
 // ---------------------------------------------------------------------------
 

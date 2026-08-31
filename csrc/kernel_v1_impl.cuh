@@ -4,6 +4,7 @@
 #include <crates/ulib/includes.hpp>
 #include <cstdio>
 #include <cooperative_groups.h>
+#include "macros.cuh"
 
 struct alignas(8) VectorRead2 {
   u32 c1, c2;
@@ -29,13 +30,17 @@ __device__ void simulate_block_v1(
   u32 *__restrict__ sram_data,
   u32 *__restrict__ shared_metadata,
   u32 *__restrict__ shared_writeouts,
-  u32 *__restrict__ shared_state
+  u32 *__restrict__ shared_state,
+  const u32 *__restrict__ macro_desc,
+  const usize *__restrict__ macro_desc_start,
+  u64 *__restrict__ macro_word_state
   )
 {
   int script_pi = 0;
   while(true) {
     VectorRead2 t2_1, t2_2;
     VectorRead4 t4_1, t4_2, t4_3, t4_4, t4_5;
+    const int part_start = script_pi;
     shared_metadata[threadIdx.x] = script[script_pi + threadIdx.x];
     script_pi += 256;
     t2_1.read(((const VectorRead2 *)(script + script_pi)) + threadIdx.x);
@@ -300,11 +305,134 @@ __device__ void simulate_block_v1(
     clken_perm = (clken_perm & ~t4_5.c2) ^ t4_5.c1;
     writeout_inv ^= t4_5.c3;
 
+    // ---------------------------------------------------------------------
+    // macro phase
+    //
+    // Runs after the boolean write-outs have settled in shared_writeouts and
+    // before they are committed to output_state, so a macro reads its operands
+    // from what this partition just produced and drops its results into the
+    // same write-out block. The normal commit path then carries them out: no
+    // separate store, and the clock-enable machinery applies unchanged.
+    //
+    // No atomics are needed for the result scatter, which is worth stating
+    // because it is not obvious. flatten.rs gives every macro its OWN whole u32
+    // write-out slots -- ceil(outputs/32) of them -- so two macros can never
+    // contend for the same word. That falls out of the slot allocation rather
+    // than being lucky.
+    //
+    // One thread per macro; batches are type-homogeneous by construction
+    // (pe.rs groups by kind), so every active lane in a batch takes the same
+    // switch arm and the warp does not diverge across kinds.
+    // ---------------------------------------------------------------------
+    __syncthreads();
+    {
+      const int num_macro_batches = shared_metadata[8];
+      const u32 *msec = script + part_start + shared_metadata[9];
+      for(int b = 0; b < num_macro_batches; ++b) {
+        const u32 kind  = msec[1];
+        const u32 count = msec[2];
+        const u32 *slots = msec + 3;
+        if(threadIdx.x < count) {
+          const u32 *d = macro_desc + macro_desc_start[slots[threadIdx.x]];
+          const u32 word_idx = d[1];
+          const u32 clk_pos  = d[2];
+          const u32 n_in     = d[3];
+          const u32 n_out    = d[4];
+          const u32 *in_pos  = d + 5;
+          const u32 *out_pos = in_pos + n_in;
+
+          // a state bit position maps to (write-out slot, bit) as
+          //   slot = (pos >> 5) - io_offset,   bit = pos & 31
+#define GEM_RD_BIT(pos)                                                 \
+          (((pos) == GEM_NO_BIT) ? 0u :                                 \
+           ((shared_writeouts[((pos) >> 5) - io_offset] >> ((pos) & 31)) & 1u))
+
+          const bool clk_en = (clk_pos == GEM_NO_BIT)
+                              ? true : (GEM_RD_BIT(clk_pos) != 0u);
+          u64 o_word = 0;
+
+          if(kind == GEM_KIND_DSP48E2) {
+            u64 a = 0, bb = 0, c = 0, dd = 0;
+            u32 k = 0;
+            for(u32 i = 0; i < GEM_DSP_A_BITS; ++i, ++k)
+              a  |= (u64)GEM_RD_BIT(in_pos[k]) << i;
+            for(u32 i = 0; i < GEM_DSP_B_BITS; ++i, ++k)
+              bb |= (u64)GEM_RD_BIT(in_pos[k]) << i;
+            for(u32 i = 0; i < GEM_DSP_C_BITS; ++i, ++k)
+              c  |= (u64)GEM_RD_BIT(in_pos[k]) << i;
+            for(u32 i = 0; i < GEM_DSP_D_BITS; ++i, ++k)
+              dd |= (u64)GEM_RD_BIT(in_pos[k]) << i;
+            const u32 pre  = GEM_RD_BIT(in_pos[k]); ++k;
+            const u32 mode = GEM_RD_BIT(in_pos[k])
+                           | (GEM_RD_BIT(in_pos[k + 1]) << 1);
+
+            const long long p_cur = (long long)macro_word_state[word_idx];
+            const long long p_nxt =
+              gem_dsp48e2(a, bb, c, dd, pre != 0, mode, p_cur);
+            // PREG is clocked: hold the old value when the enable is low.
+            const long long p_com = clk_en ? p_nxt : p_cur;
+            macro_word_state[word_idx] = (u64)p_com;
+            o_word = (u64)p_com & ((1ull << GEM_DSP_P_BITS) - 1);
+          }
+          else if(kind == GEM_KIND_CARRY4) {
+            u32 S = 0, DI = 0;
+            for(u32 i = 0; i < GEM_CARRY4_BITS; ++i)
+              S  |= GEM_RD_BIT(in_pos[i]) << i;
+            for(u32 i = 0; i < GEM_CARRY4_BITS; ++i)
+              DI |= GEM_RD_BIT(in_pos[GEM_CARRY4_BITS + i]) << i;
+            const bool cin = GEM_RD_BIT(in_pos[2 * GEM_CARRY4_BITS]) != 0;
+            const bool cyi = GEM_RD_BIT(in_pos[2 * GEM_CARRY4_BITS + 1]) != 0;
+            u32 CO, O;
+            gem_carry4(S, DI, cin, cyi, &CO, &O);
+            // output slots are CO[3:0] then O[3:0] -- MacroKind::output_slot
+            o_word = (u64)CO | ((u64)O << GEM_CARRY4_BITS);
+          }
+          else {  // GEM_KIND_SRLC32E
+            const u32 d_in = GEM_RD_BIT(in_pos[0]);
+            const u32 ce   = GEM_RD_BIT(in_pos[1]);
+            u32 addr = 0;
+            for(u32 i = 0; i < 5; ++i)
+              addr |= GEM_RD_BIT(in_pos[2 + i]) << i;
+            const u32 sr = (u32)macro_word_state[word_idx];
+            bool q, q31;
+            // read the CURRENT state, then shift: GEM's read-old / commit-new
+            // discipline, exactly as the DFF path does it
+            gem_srlc32e_read(sr, addr, &q, &q31);
+            o_word = (u64)(q ? 1u : 0u) | ((u64)(q31 ? 1u : 0u) << 1);
+            if(clk_en)
+              macro_word_state[word_idx] =
+                (u64)gem_srlc32e_edge(sr, d_in != 0, ce != 0);
+          }
+
+          // Scatter. This macro owns these words outright, so a plain
+          // read-modify-write is safe -- see the note above.
+          for(u32 i = 0; i < n_out; ++i) {
+            const u32 pos = out_pos[i];
+            if(pos == GEM_NO_BIT) continue;
+            const u32 slot = (pos >> 5) - io_offset;
+            const u32 bit  = pos & 31;
+            const u32 v    = (u32)((o_word >> i) & 1ull);
+            shared_writeouts[slot] =
+              (shared_writeouts[slot] & ~(1u << bit)) | (v << bit);
+          }
+#undef GEM_RD_BIT
+        }
+        __syncthreads();
+        msec += 3 + count;
+      }
+    }
+    __syncthreads();
+    writeout_inv = shared_writeouts[threadIdx.x] ^ t4_5.c3;
+
     if(threadIdx.x < num_ios) {
       u32 old_wo = input_state[io_offset + threadIdx.x];
       u32 wo = (old_wo & ~clken_perm) | (writeout_inv & clken_perm);
       output_state[io_offset + threadIdx.x] = wo;
     }
+
+    // Jump past the macro section instead of walking off the end of it: the
+    // assert below requires script_pi to land exactly on script_size.
+    script_pi = part_start + (int)shared_metadata[10];
 
     if(is_last_part) break;
   }
@@ -319,7 +447,10 @@ __global__ void simulate_v1_noninteractive_simple_scan(
   u32 *__restrict__ sram_data,
   usize num_cycles,
   usize state_size,
-  u32 *__restrict__ states_noninteractive
+  u32 *__restrict__ states_noninteractive,
+  const u32 *__restrict__ macro_desc,
+  const usize *__restrict__ macro_desc_start,
+  u64 *__restrict__ macro_word_state
   )
 {
   assert(num_blocks == gridDim.x);
@@ -342,7 +473,8 @@ __global__ void simulate_v1_noninteractive_simple_scan(
         states_noninteractive + cycle_i * state_size,
         states_noninteractive + (cycle_i + 1) * state_size,
         sram_data,
-        shared_metadata, shared_writeouts, shared_state
+        shared_metadata, shared_writeouts, shared_state,
+        macro_desc, macro_desc_start, macro_word_state
         );
       cooperative_groups::this_grid().sync();
     }

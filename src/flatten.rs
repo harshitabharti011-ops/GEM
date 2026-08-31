@@ -100,6 +100,9 @@ pub struct FlattenedScriptV1 {
     ///       followed by [3(+1padding)x]
     ///         clock invert, clock set0, data invert, and 0 padding
     ///    -. commit the write-out
+    ///    metadata[10] is the total word length of this partition's script,
+    ///    so the kernel can skip the macro section rather than walking off the
+    ///    end of it.
     /// 5. macro section (only if metadata[8] != 0; starts at metadata[9],
     ///    a word offset from the beginning of this partition's script).
     ///    repeated metadata[8] times:
@@ -859,6 +862,11 @@ impl FlatteningPart {
         }
         script[8] = num_batches;
         script[9] = if num_batches == 0 { 0 } else { macro_section_start };
+        // Total words in this partition's script. simulate_block_v1 walks
+        // script_pi linearly and asserts it lands exactly on script_size, so
+        // it cannot simply fall off the end of a trailing macro section -- it
+        // jumps to part_start + this instead.
+        script[10] = script.len() as u32;
 
         script
     }
