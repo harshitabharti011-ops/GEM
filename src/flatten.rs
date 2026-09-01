@@ -6,7 +6,7 @@ use crate::aig::{AIG, EndpointGroup, DriverType};
 use crate::aigpdk::AIGPDK_SRAM_ADDR_WIDTH;
 use crate::pe::{Partition, BOOMERANG_NUM_STAGES, BOOMERANG_MAX_WRITEOUTS};
 use crate::staging::StagedAIG;
-use crate::macro_layout::{MacroIo, MacroLayout, NO_BIT, kind_code};
+use crate::macro_layout::{MacroIo, MacroLayout, NO_BIT, CONST_ONE, kind_code};
 use crate::macros::MacroBlock;
 
 /// Writeout activation for a macro's inputs.
@@ -593,7 +593,9 @@ impl FlatteningPart {
             let mut in_bit_pos = Vec::with_capacity(mb.in_iv.len());
             for &in_iv in mb.in_iv.iter() {
                 if in_iv <= 1 || in_iv == usize::MAX {
-                    in_bit_pos.push(NO_BIT);
+                    // iv 0 is constant false; iv 1 is constant TRUE. They must
+                    // not share a sentinel -- see macro_layout::CONST_ONE.
+                    in_bit_pos.push(if in_iv == 1 { CONST_ONE } else { NO_BIT });
                     continue
                 }
                 if let Some(&pos) = macro_out_pos.get(&(in_iv >> 1)) {
@@ -631,7 +633,8 @@ impl FlatteningPart {
                 let lo = self.state_start * 32;
                 let hi = (self.state_start + self.num_writeouts) * 32;
                 let mut check = |what: &str, i: usize, p: u32| {
-                    if p == NO_BIT { return }
+                    // Both sentinels denote a tied constant, not a state bit.
+                    if p == NO_BIT || p == CONST_ONE { return }
                     assert!(p >= lo && p < hi,
                         "macro cell {} ({:?}) {} {} maps to state bit {}, \
                          outside this part's write-out block [{}, {}). The \

@@ -47,6 +47,16 @@ pub const WARP: usize = 32;
 /// bit-state, and an output bit that nothing reads.
 pub const NO_BIT: u32 = u32::MAX;
 
+/// Marks an input bit tied to constant ONE.
+///
+/// A separate sentinel is required, not a convenience. In the AIG's iv
+/// encoding both constants live on aigpin 0 -- `iv == 0` is false and
+/// `iv == 1` is true -- so collapsing both to [`NO_BIT`] makes a hard-wired 1
+/// read as 0. That silently disables `USE_PREADD` on a DSP configured with
+/// `.USE_PREADD(1'b1)`, and turns `.MODE(2'd1)` into mode 0, which is bypass.
+/// Neither produces an error; both produce wrong arithmetic forever.
+pub const CONST_ONE: u32 = u32::MAX - 1;
+
 /// The three kinds, in the fixed order their runs appear in `word_state`.
 pub const KIND_ORDER: [MacroKind; 3] =
     [MacroKind::Dsp48e2, MacroKind::Srlc32e, MacroKind::Carry4];

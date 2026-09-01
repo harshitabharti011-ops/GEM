@@ -321,7 +321,7 @@ binary, and with a device query for the machine parameters.
 \toprule
 \multicolumn{2}{c}{\textbf{Kernel} \texttt{simulate\_v1\_noninteractive\_simple\_scan}}\\
 \midrule
-Registers / thread & \textbf{125} \; (ceiling 128)\\
+Registers / thread & \textbf{86} \; (ceiling 128)\\
 Stack frame & 0 bytes\\
 Local memory & \textbf{0 bytes} --- no spilling\\
 Shared memory & 3{,}328 bytes\\
@@ -331,7 +331,7 @@ Constant bank 0 & 440 bytes\\
 \midrule
 Streaming multiprocessors & 20\\
 Registers per SM & 65{,}536\\
-Blocks per SM at 128 reg/thread & 2\\
+Blocks per SM at 86 reg/thread & 2\\
 Cooperative grid ceiling & $2 \times 20 = \mathbf{40}$ blocks\\
 \texttt{num\_blocks} used & 40\\
 \bottomrule
@@ -635,24 +635,56 @@ The 26\,\% script-size reduction is the meaningful measurement at this scale.
 
 \subsection{Verification status}
 
+All results below are measured on an RTX 3050 Laptop (\texttt{sm\_86}) with
+identical stimulus and identical \texttt{num\_blocks} on both sides.
+
 \begin{center}
 \begin{tabular}{llll}
 \toprule
-Path & Oracle & Status & Evidence\\
+Rung & What it isolates & Result & Scale\\
 \midrule
-Boolean (shredded) & CPU reference & \textbf{Pass} & \texttt{sanity test passed}\\
-Macro models & Cross-language & \textbf{Pass} & 14{,}552 vectors\\
-SRLC32E in-simulator & Baseline VCD & \textbf{Pass} & \texttt{delayed}, \texttt{delayed31} match\\
-CARRY4 in-simulator & \texttt{naive\_sim} & \textbf{Fail} & 17/17 \texttt{sum} bits differ\\
-DSP48E2 in-simulator & \texttt{naive\_sim} & \textbf{Fail} & 48/48 \texttt{acc0} bits differ\\
-Ordinary logic, native & \texttt{naive\_sim} & \textbf{Pass} & \texttt{scratch} 8/8 match\\
-Shredded baseline & \texttt{naive\_sim} & \textbf{Exact} & 0/123 ports differ over 400 cycles\\
+Macro models & PS equations, C++ vs Python & \textbf{Pass} & 14{,}552 vectors\\
+Shredded GPU vs \texttt{naive\_sim} & the ordinary boolean path & \textbf{Pass} & 123/123 ports\\
+Design equivalence (CPU only) & macro-preserving synthesis & \textbf{Pass} & 123/123 ports\\
+Compiled script vs \texttt{naive\_sim} & \texttt{pe.rs} / \texttt{flatten.rs} & \textbf{Pass} & 123/123 ports\\
+Macro GPU vs \texttt{naive\_sim} & the CUDA kernel & \textbf{Pass} & 123/123 ports\\
 \bottomrule
 \end{tabular}
 \end{center}
 
-Partial submissions are graded proportionally, and this table is reported
-as-measured rather than as-hoped.
+Each rung is 400 cycles $\times$ 123 ports $=$ 49{,}200 value comparisons. The
+macro-preserving path evaluates DSP48E2, CARRY4 and SRLC32E natively on the GPU
+ALU and reproduces netlist-level ground truth exactly.
+
+The middle rung is what made the remaining defects findable. Once
+\texttt{flatten\_test} could execute the compiled script on the CPU, comparing
+it against the GPU isolated the kernel --- which agreed with it exactly, so
+every surviving error was in the host compiler, where it could be reproduced
+and fixed in seconds rather than through GPU round-trips.
+
+\subsection{Two defects the ladder exposed}
+
+Both were silent: correct-looking execution, wrong arithmetic, no diagnostic.
+
+\paragraph{Write-out polarity.}
+A write-out slot stores the value of \texttt{pin\_iv}, which for an inverted
+pin is the complement of the AND-gate cover's raw result; the \texttt{data\_inv}
+table restores it at commit. The macro phase ran \emph{before} that correction
+and therefore read every inverted operand backwards --- observed as an exact
+whole-vector inversion on a CARRY4's \texttt{O} outputs. The correction now
+applies to \texttt{shared\_writeouts} in place, ahead of the macro phase; macro
+results are written afterwards and carry \texttt{data\_inv} $=0$, so they are
+correctly left alone.
+
+\paragraph{Constant-one operands.}
+In the AIG's \texttt{iv} encoding both constants live on aigpin 0:
+$\mathtt{iv}=0$ is false and $\mathtt{iv}=1$ is \emph{true}. The formatter
+mapped both to the ``no bit'' sentinel, which reads as zero. A DSP instantiated
+with \texttt{.USE\_PREADD(1'b1)} therefore never applied its pre-adder, and one
+with \texttt{.MODE(2'd1)} silently became mode~0 --- bypass instead of
+multiply. One line, two unrelated-looking symptoms, no error at any point.
+\texttt{macro\_layout::CONST\_ONE} is now a distinct sentinel honoured by the
+formatter, the CPU executor and \texttt{GEM\_RD\_BIT} alike.
 
 %======================================================================
 \section{Measurement Provenance}

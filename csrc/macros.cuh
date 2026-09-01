@@ -53,6 +53,12 @@
 #define GEM_KIND_SRLC32E  1u
 #define GEM_KIND_CARRY4   2u
 #define GEM_NO_BIT        0xFFFFFFFFu
+/* An input tied to constant ONE. Distinct from GEM_NO_BIT because the AIG
+   keeps both constants on aigpin 0 -- iv 0 is false, iv 1 is true -- so one
+   sentinel for both makes a hard-wired 1 read as 0, silently disabling
+   USE_PREADD and collapsing MODE 1 to MODE 0. Must match
+   macro_layout::CONST_ONE. */
+#define GEM_CONST_ONE     0xFFFFFFFEu
 
 // ---------------------------------------------------------------------------
 // sign extension

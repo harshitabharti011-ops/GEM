@@ -21,6 +21,20 @@
 set -uo pipefail
 cd "$(dirname "$0")/.."
 V=build_native/in.vcd
+NB=${NB:-40}          # blocks; MUST be identical for both GPU runs
+
+# Regenerate BOTH GPU waveforms from the current binary and the current
+# stimulus. Comparing a freshly-run CPU reference against a stale out.vcd is
+# the one way to make this whole ladder lie, so the runs live here rather than
+# being left to the caller to remember.
+echo "==> GPU: shredded"
+./target/release/cuda_test --top-module macro_smoke \
+    build_shred/gatelevel.gv  build_shred/r.gemparts \
+    "$V" build_shred/out.vcd  "$NB" 2>&1 | grep -E "Elapsed|error|panic" | tail -2
+echo "==> GPU: macro-preserving"
+./target/release/cuda_test --top-module macro_smoke \
+    build_native/gatelevel.gv build_native/r.gemparts \
+    "$V" build_native/out.vcd "$NB" 2>&1 | grep -E "Elapsed|error|panic" | tail -2
 
 echo "==> CPU reference: shredded netlist"
 ./target/release/naive_sim --top-module macro_smoke \

@@ -6,6 +6,8 @@ use gem::aig::{DriverType, AIG};
 use gem::staging::build_staged_aigs;
 use gem::pe::{Partition, BOOMERANG_NUM_STAGES};
 use gem::flatten::FlattenedScriptV1;
+use gem::macros::{host_dsp48e2, host_carry4, host_srlc32e_read, host_srlc32e_edge};
+use gem::macro_layout::{NO_BIT, CONST_ONE};
 use netlistdb::{Direction, GeneralPinName, NetlistDB};
 use sverilogparse::SVerilogRange;
 use compact_str::CompactString;
@@ -72,10 +74,14 @@ fn simulate_block_v1(
     parts: &[Partition],
     aigpin_values: &mut [u8],
     parts_input_hashes: &mut [u64],
+    macro_desc: &[u32],
+    macro_desc_start: &[usize],
+    macro_word_state: &mut [u64],
 ) {
     let mut script_pi = 0;
     let mut part_i_dbg = 0;
     loop {
+        let part_start = script_pi;
         let num_stages = script[script_pi];
         let is_last_part = script[script_pi + 1];
         let num_ios = script[script_pi + 2];
@@ -300,6 +306,108 @@ fn simulate_block_v1(
             clken_perm[i] ^= script[script_pi + i * 4];
             writeouts[i] ^= script[script_pi + i * 4 + 2];
         }
+
+        // --- macro phase -------------------------------------------------
+        // Runs after the boolean write-outs have settled AND after the
+        // data_inv correction above, so a macro reads its operands in their
+        // committed polarity.
+        //
+        // Ordering here is load-bearing. A write-out slot stores the value of
+        // pin_iv, which for an inverted pin is the COMPLEMENT of the AND-gate
+        // cover's raw result; data_inv is what restores it. A macro reading
+        // shared_writeouts before that correction gets the wrong polarity on
+        // every inverted operand -- which is exactly the whole-vector
+        // inversion originally observed on the CARRY4 sum output.
+        //
+        // Macro results are written after the correction and carry data_inv=0,
+        // so they must NOT be XORed again; that is why the correction moved
+        // ahead of this phase rather than the phase reading the table itself.
+        {
+            let num_batches = script[part_start + 8] as usize;
+            let mut msec = part_start + script[part_start + 9] as usize;
+            for _ in 0..num_batches {
+                let kind = script[msec + 1];
+                let count = script[msec + 2] as usize;
+                for lane in 0..count {
+                    let slot = script[msec + 3 + lane] as usize;
+                    let d = &macro_desc[macro_desc_start[slot]..macro_desc_start[slot + 1]];
+                    let word_idx = d[1] as usize;
+                    let clk_pos = d[2];
+                    let n_in = d[3] as usize;
+                    let in_pos = &d[5..5 + n_in];
+                    let out_pos = &d[5 + n_in..];
+                    // a state bit position maps to (write-out slot, bit) as
+                    //   slot = (pos >> 5) - io_offset,  bit = pos & 31
+                    let rd = |pos: u32| -> u32 {
+                        if pos == CONST_ONE { 1 }
+                        else if pos == NO_BIT { 0 }
+                        else {
+                            (writeouts[((pos >> 5) - io_offset) as usize]
+                             >> (pos & 31)) & 1
+                        }
+                    };
+                    let clk_en = clk_pos == NO_BIT || rd(clk_pos) != 0;
+                    let o_word: u64;
+                    match kind {
+                        0 => {   // DSP48E2
+                            let mut k = 0usize;
+                            let mut gather = |n: usize, k: &mut usize| -> u64 {
+                                let mut v = 0u64;
+                                for i in 0..n { v |= (rd(in_pos[*k]) as u64) << i; *k += 1; }
+                                v
+                            };
+                            let a = gather(27, &mut k);
+                            let b = gather(18, &mut k);
+                            let c = gather(48, &mut k);
+                            let dd = gather(27, &mut k);
+                            let pre = rd(in_pos[k]); k += 1;
+                            let mode = rd(in_pos[k]) | (rd(in_pos[k + 1]) << 1);
+                            let p_cur = macro_word_state[word_idx] as i64;
+                            let p_nxt = host_dsp48e2(a, b, c, dd, pre != 0, mode, p_cur);
+                            // PREG is clocked: hold when the enable is low.
+                            let p_com = if clk_en { p_nxt } else { p_cur };
+                            macro_word_state[word_idx] = p_com as u64;
+                            o_word = (p_com as u64) & ((1u64 << 48) - 1);
+                        },
+                        2 => {   // CARRY4
+                            let mut s = 0u32; let mut di = 0u32;
+                            for i in 0..4 { s  |= rd(in_pos[i]) << i; }
+                            for i in 0..4 { di |= rd(in_pos[4 + i]) << i; }
+                            let cin = rd(in_pos[8]) != 0;
+                            let cyi = rd(in_pos[9]) != 0;
+                            let (co, o) = host_carry4(s, di, cin, cyi);
+                            // output slots are CO[3:0] then O[3:0]
+                            o_word = (co as u64) | ((o as u64) << 4);
+                        },
+                        _ => {   // SRLC32E
+                            let d_in = rd(in_pos[0]);
+                            let ce = rd(in_pos[1]);
+                            let mut addr = 0u32;
+                            for i in 0..5 { addr |= rd(in_pos[2 + i]) << i; }
+                            let sr = macro_word_state[word_idx] as u32;
+                            // read the CURRENT state, then shift
+                            let (q, q31) = host_srlc32e_read(sr, addr);
+                            o_word = (q as u64) | ((q31 as u64) << 1);
+                            if clk_en {
+                                macro_word_state[word_idx] =
+                                    host_srlc32e_edge(sr, d_in != 0, ce != 0) as u64;
+                            }
+                        },
+                    }
+                    // Scatter. Each macro owns whole u32 write-out slots, so a
+                    // plain read-modify-write cannot collide with another.
+                    for (i, &pos) in out_pos.iter().enumerate() {
+                        if pos == NO_BIT { continue }
+                        let slot = ((pos >> 5) - io_offset) as usize;
+                        let bit = pos & 31;
+                        let v = ((o_word >> i) & 1) as u32;
+                        writeouts[slot] = (writeouts[slot] & !(1u32 << bit)) | (v << bit);
+                    }
+                }
+                msec += 3 + count;
+            }
+        }
+
         script_pi += 256 * 4;
         // println!("test: clken_perm {:?}", clken_perm);
 
@@ -314,6 +422,10 @@ fn simulate_block_v1(
         // if parts_indices[part_i_dbg] == 274 {
         //     println!("debug part 274 output ")
         // }
+
+        // Jump past this partition's macro section, exactly as
+        // simulate_block_v1 does with shared_metadata[10].
+        script_pi = part_start + script[part_start + 10] as usize;
 
         if is_last_part != 0 {
             break
@@ -588,6 +700,9 @@ fn main() {
     // do simulation
     let mut state = vec![0; script.reg_io_state_size as usize];
     let mut sram_storage = vec![0; script.sram_storage_size as usize];
+    // Word-level macro state (a DSP's PREG, an SRLC32E's shift register),
+    // persistent across cycles exactly like the device-side region.
+    let mut macro_word_state = vec![0u64; script.macro_word_state_size as usize];
 
     // the simulator keeps 2 previous timestamps.
     // vcd_time: the last seen timestamp.
@@ -636,6 +751,9 @@ fn main() {
                                 &parts_in_stages[stage_i],
                                 &mut aigpin_values_debug,
                                 &mut parts_input_hashes_cur,
+                                &script.macro_descriptors,
+                                &script.macro_desc_start,
+                                &mut macro_word_state,
                             );
                         }
                     }

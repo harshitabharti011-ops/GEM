@@ -399,3 +399,59 @@ mod canonical_order_tests {
         assert!(mb.comb_inputs().is_empty(), "a DSP has no comb fan-in");
     }
 }
+
+// ---------------------------------------------------------------------------
+// Host-side evaluation, mirroring csrc/macros.cuh
+//
+// These exist so the CPU script executor (src/bin/flatten_test.rs) can run the
+// macro phase exactly as the kernel does, isolating a script/layout defect
+// from a kernel defect. They deliberately mirror the CUDA models rather than
+// re-deriving the equations: the arithmetic is already verified exhaustively
+// by csrc/tests/verify_macros.sh, so what this rung tests is the SCRIPT, not
+// the maths.
+//
+// naive_sim.rs keeps its own independent transcription from the problem
+// statement. The two must never be merged -- comparing them is what makes the
+// ladder's middle rung meaningful.
+// ---------------------------------------------------------------------------
+
+/// Sign-extend the low `bits` of `v`.
+pub fn host_sext(v: u64, bits: u32) -> i64 {
+    let sh = 64 - bits;
+    ((v << sh) as i64) >> sh
+}
+
+/// DSP48E2, simplified subset. Mirrors `gem_dsp48e2`.
+pub fn host_dsp48e2(a: u64, b: u64, c: u64, d: u64,
+                    use_preadd: bool, mode: u32, p_cur: i64) -> i64 {
+    let (a, b, c, d) = (host_sext(a, 27), host_sext(b, 18),
+                        host_sext(c, 48), host_sext(d, 27));
+    // 27-bit pre-adder, wraps -- this is why the product is 45 bits, not 46.
+    let ad = host_sext((if use_preadd { a + d } else { a }) as u64, 27);
+    let m = host_sext((ad * b) as u64, 45);
+    let p = match mode { 0 => c, 1 => m, _ => p_cur + m };
+    host_sext(p as u64, 48)
+}
+
+/// CARRY4. Mirrors `gem_carry4`; returns `(CO, O)`.
+pub fn host_carry4(s: u32, di: u32, cin: bool, cyinit: bool) -> (u32, u32) {
+    let (s, di) = (s & 0xF, di & 0xF);
+    let c0 = (cyinit as u32) | (cin as u32);
+    let (mut c, mut co) = (c0, 0u32);
+    for i in 0..4 {
+        let cn = ((!s >> i) & (di >> i) & 1) | (((s >> i) & 1) & c);
+        co |= cn << i;
+        c = cn;
+    }
+    (co, (s ^ (c0 | (co << 1))) & 0xF)
+}
+
+/// SRLC32E combinational read. Mirrors `gem_srlc32e_read`; returns `(Q, Q31)`.
+pub fn host_srlc32e_read(state: u32, a: u32) -> (bool, bool) {
+    (((state >> (a & 31)) & 1) != 0, ((state >> 31) & 1) != 0)
+}
+
+/// SRLC32E clock edge. Mirrors `gem_srlc32e_edge`.
+pub fn host_srlc32e_edge(state: u32, d: bool, ce: bool) -> u32 {
+    if ce { (state << 1) | (d as u32) } else { state }
+}

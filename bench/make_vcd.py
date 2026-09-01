@@ -76,7 +76,14 @@ def main():
 
         def put(n, w, v):
             if w == 1: f.write(f"{v & 1}{ids[n]}\n")
-            else:      f.write(f"b{v & ((1 << w) - 1):b} {ids[n]}\n")
+            else:
+                # Zero-pad to the declared width. The VCD spec left-extends a
+                # short vector with its leading character, so an unpadded value
+                # is LSB-aligned -- but any consumer that MSB-aligns instead
+                # silently shifts the operand by the number of omitted zeros.
+                # Padding removes the ambiguity rather than relying on every
+                # reader agreeing about it.
+                f.write(f"b{v & ((1 << w) - 1):0{w}b} {ids[n]}\n")
 
         f.write("#0\n")
         for n, w in ports:

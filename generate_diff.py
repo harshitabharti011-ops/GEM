@@ -9,7 +9,7 @@ def run_git_command(args):
     return result.stdout.strip()
 
 def main():
-    base_branch = "main"  # Change to "master" if your default branch is master
+    base_branch = "staged-aig-release"  # Change to "master" if your default branch is master
     target_branch = "feat/macro-frontend"
     
     print(f"Analyzing changes between '{base_branch}' and '{target_branch}'...")
