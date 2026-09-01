@@ -99,7 +99,12 @@ fn simulate_block_v1(
         part_i_dbg += 1;
         // println!("part start");
         assert_eq!(part.stages.len(), num_stages as usize);
-        assert_eq!(part.stages.iter().map(|s| s.write_outs.len()).sum::<usize>(), (num_ios - num_srams - num_output_duplicates) as usize);
+        // Stale once macros exist: num_ios now also covers the macro block,
+        // whose bits are filled by the macro phase rather than by any
+        // boomerang write-out. On macro_smoke the gap is exactly the 9 macro
+        // slots (2 DSP x 2 + 4 CARRY4 x 1 + 1 SRL x 1). cuda_test.rs:197 has
+        // carried this same line commented out for the same reason.
+        // assert_eq!(part.stages.iter().map(|s| s.write_outs.len()).sum::<usize>(), (num_ios - num_srams - num_output_duplicates) as usize);
         script_pi += 256;
         let mut writeouts = vec![0u32; num_ios as usize];
 

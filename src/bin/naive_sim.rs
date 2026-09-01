@@ -10,6 +10,66 @@ use compact_str::CompactString;
 use netlistdb::{Direction, GeneralHierName, GeneralPinName, NetlistDB};
 use sverilogparse::SVerilogRange;
 use itertools::Itertools;
+use gem::macros::MacroKind;
+
+// ---------------------------------------------------------------------------
+// Word-level macro evaluation for the CPU reference simulator.
+//
+// naive_sim is the bottom rung of the verification ladder: it evaluates the
+// NETLIST directly, with no script, no partitioning and no boomerang
+// scheduling, so it shares essentially no machinery with the GPU path. Without
+// macro support it can only validate the shredded baseline, which leaves the
+// macro-preserving path with no CPU-side ground truth at all.
+//
+// The equations below are transcribed from the problem statement, in Rust, and
+// are deliberately NOT a port of csrc/macros.cuh -- an independent
+// transcription is the whole point of a reference model.
+// ---------------------------------------------------------------------------
+
+fn sext(v: u64, bits: u32) -> i64 {
+    let sh = 64 - bits;
+    ((v << sh) as i64) >> sh
+}
+
+fn eval_dsp48e2(a: u64, b: u64, c: u64, d: u64,
+                use_preadd: bool, mode: u64, p_cur: i64) -> i64 {
+    let (a, b, c, d) = (sext(a, 27), sext(b, 18), sext(c, 48), sext(d, 27));
+    // The pre-adder is 27 bits wide and WRAPS; that is why the product is 45
+    // bits rather than 46.
+    let ad = sext((if use_preadd { a + d } else { a }) as u64, 27);
+    let m = sext((ad * b) as u64, 45);
+    let p = match mode { 0 => c, 1 => m, _ => p_cur + m };
+    sext(p as u64, 48)
+}
+
+fn eval_carry4(s: u64, di: u64, cin: u64, cyinit: u64) -> (u64, u64) {
+    let mut c = (cyinit | cin) & 1;
+    let (mut co, mut o) = (0u64, 0u64);
+    for i in 0..4 {
+        let (si, dii) = ((s >> i) & 1, (di >> i) & 1);
+        o |= (si ^ c) << i;
+        c = (si & c) | ((si ^ 1) & dii);
+        co |= c << i;
+    }
+    (co, o)
+}
+
+/// Per-instance macro state: a DSP's PREG, an SRLC32E's 32-bit shift register.
+#[derive(Default, Clone, Copy)]
+struct MacroState { p: i64, sr: u32 }
+
+/// Assemble a multi-bit input port of `cellid` from the pin-level state.
+fn gather_port(netlistdb: &NetlistDB, circ_state: &[u8],
+               cellid: usize, port: &str) -> u64 {
+    let mut v = 0u64;
+    for pinid in netlistdb.cell2pin.iter_set(cellid) {
+        if netlistdb.pinnames[pinid].1.as_str() == port {
+            let bit = netlistdb.pinnames[pinid].2.unwrap_or(0).max(0) as u32;
+            v |= (circ_state[pinid] as u64) << bit;
+        }
+    }
+    v
+}
 use vcd_ng::{Parser, ScopeItem, Var, Scope, FastFlow, FastFlowToken, FFValueChange, Writer, SimulationCommand};
 use gem::aigpdk::AIGPDKLeafPins;
 
@@ -258,6 +318,7 @@ fn main() {
     }
 
     let mut circ_state = vec![0u8; netlistdb.num_pins];
+    let mut macro_states = HashMap::<usize, MacroState>::new();
     let mut srams = HashMap::new();
     if let Some(netid) = netlistdb.net_one {
         for pinid in netlistdb.net2pin.iter_set(netid) {
@@ -287,6 +348,19 @@ fn main() {
         if netlistdb.celltypes[cellid].as_str() == "$__RAMGEM_SYNC_" {
             srams.insert(cellid, vec![0u32; 1 << 13]);
         }
+        // A macro with no combinational outputs -- a DSP, whose only output P
+        // is clocked -- is a topological leaf exactly like a DFF's Q: its
+        // value is read from state and committed at the edge.
+        if let Some(k) = MacroKind::from_celltype(netlistdb.celltypes[cellid].as_str()) {
+            macro_states.insert(cellid, MacroState::default());
+            if !k.has_comb_outputs() {
+                for pinid in netlistdb.cell2pin.iter_set(cellid) {
+                    if netlistdb.pindirect[pinid] != Direction::I {
+                        topo_vis[pinid] = true;
+                    }
+                }
+            }
+        }
     }
     fn dfs_topo(netlistdb: &NetlistDB, topo_vis: &mut Vec<bool>, topo_instack: &mut Vec<bool>, topo: &mut Vec<usize>, pinid: usize) {
         if topo_instack[pinid] {
@@ -306,9 +380,20 @@ fn main() {
         }
         else {
             let cellid = netlistdb.pin2cell[pinid];
+            let mk = MacroKind::from_celltype(netlistdb.celltypes[cellid].as_str());
             for pinid in netlistdb.cell2pin.iter_set(cellid) {
-                if matches!(netlistdb.pinnames[pinid].1.as_str(),
-                            "A" | "B") {
+                let pn = netlistdb.pinnames[pinid].1.as_str();
+                let take = match mk {
+                    // Only the COMBINATIONAL inputs create a topological edge.
+                    // Treating a DSP's A/B/C/D or an SRL's D/CE as
+                    // combinational fan-in would manufacture false loops in
+                    // netlists that legitimately feed a macro's output back
+                    // into another macro's clocked input.
+                    Some(k) => netlistdb.pindirect[pinid] == Direction::I
+                               && k.is_comb_input(pn),
+                    None => matches!(pn, "A" | "B"),
+                };
+                if take {
                     dfs_topo(netlistdb, topo_vis, topo_instack, topo, pinid);
                 }
             }
@@ -328,6 +413,16 @@ fn main() {
             for pinid in netlistdb.cell2pin.iter_set(cellid) {
                 if matches!(netlistdb.pinnames[pinid].1.as_str(),
                             "D" | "PORT_R_ADDR" | "PORT_W_WR_EN" | "PORT_W_ADDR" | "PORT_W_WR_DATA") {
+                    dfs_topo(&netlistdb, &mut topo_vis, &mut topo_instack, &mut topo, pinid);
+                }
+            }
+        }
+        // Every macro operand must be resolved before the edge commits, so
+        // seed the traversal from all of them -- clocked ones included.
+        if MacroKind::from_celltype(netlistdb.celltypes[cellid].as_str()).is_some() {
+            for pinid in netlistdb.cell2pin.iter_set(cellid) {
+                if netlistdb.pindirect[pinid] == Direction::I
+                    && netlistdb.pinnames[pinid].1.as_str() != "CLK" {
                     dfs_topo(&netlistdb, &mut topo_vis, &mut topo_instack, &mut topo, pinid);
                 }
             }
@@ -412,6 +507,34 @@ fn main() {
                             }
                             circ_state[pinid_q] = circ_state[pinid_d];
                         }
+                        else if let Some(k) = MacroKind::from_celltype(
+                            netlistdb.celltypes[cellid].as_str()) {
+                            let g = |port: &str| gather_port(&netlistdb, &circ_state, cellid, port);
+                            let st = macro_states.get_mut(&cellid).unwrap();
+                            match k {
+                                MacroKind::Dsp48e2 => {
+                                    st.p = eval_dsp48e2(
+                                        g("A"), g("B"), g("C"), g("D"),
+                                        g("USE_PREADD") != 0, g("MODE"), st.p);
+                                },
+                                MacroKind::Srlc32e => {
+                                    if g("CE") != 0 {
+                                        st.sr = (st.sr << 1) | (g("D") as u32 & 1);
+                                    }
+                                },
+                                MacroKind::Carry4 => {},
+                            }
+                            let p = st.p;
+                            if k == MacroKind::Dsp48e2 {
+                                for pinid in netlistdb.cell2pin.iter_set(cellid) {
+                                    if netlistdb.pinnames[pinid].1.as_str() == "P" {
+                                        let bit = netlistdb.pinnames[pinid].2
+                                            .unwrap_or(0).max(0) as u32;
+                                        circ_state[pinid] = ((p as u64 >> bit) & 1) as u8;
+                                    }
+                                }
+                            }
+                        }
                         else if netlistdb.celltypes[cellid].as_str() == "$__RAMGEM_SYNC_" {
                             let sram = srams.get_mut(&cellid).unwrap();
                             let mut port_r_addr = 0usize;
@@ -479,6 +602,44 @@ fn main() {
                         }
                         else {
                             let cellid = netlistdb.pin2cell[pinid];
+                            // Combinational macro outputs: a CARRY4's CO/O,
+                            // an SRLC32E's Q/Q31. A DSP never reaches here --
+                            // its P was marked a topological leaf.
+                            if let Some(k) = MacroKind::from_celltype(
+                                netlistdb.celltypes[cellid].as_str()) {
+                                let st = *macro_states.get(&cellid).unwrap();
+                                let pn = netlistdb.pinnames[pinid].1.clone();
+                                let bit = netlistdb.pinnames[pinid].2
+                                    .unwrap_or(0).max(0) as u32;
+                                let v = match k {
+                                    MacroKind::Carry4 => {
+                                        let (co, o) = eval_carry4(
+                                            gather_port(&netlistdb, &circ_state, cellid, "S"),
+                                            gather_port(&netlistdb, &circ_state, cellid, "DI"),
+                                            gather_port(&netlistdb, &circ_state, cellid, "CIN"),
+                                            gather_port(&netlistdb, &circ_state, cellid, "CYINIT"));
+                                        match pn.as_str() {
+                                            "CO" => (co >> bit) & 1,
+                                            "O"  => (o  >> bit) & 1,
+                                            _ => 0,
+                                        }
+                                    },
+                                    MacroKind::Srlc32e => {
+                                        // Read the CURRENT state: Q is a
+                                        // combinational read of the register
+                                        // as it stands before this edge.
+                                        let a = gather_port(&netlistdb, &circ_state, cellid, "A");
+                                        match pn.as_str() {
+                                            "Q"   => ((st.sr >> (a & 31)) & 1) as u64,
+                                            "Q31" => ((st.sr >> 31) & 1) as u64,
+                                            _ => 0,
+                                        }
+                                    },
+                                    MacroKind::Dsp48e2 => 0,
+                                };
+                                circ_state[pinid] = v as u8;
+                                continue
+                            }
                             let mut vala = 0;
                             let mut valb = 0;
                             for pinid_inp in netlistdb.cell2pin.iter_set(cellid) {

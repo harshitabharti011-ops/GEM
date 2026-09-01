@@ -1,0 +1,1604 @@
+warning: field `name` is never read
+   --> eda-infra-rs/ulib_zeroable_derive/src/datastructure.rs:144:9
+    |
+132 | pub struct Struct<'a> {
+    |            ------ field in this struct
+...
+144 |     pub name: &'a Ident,
+    |         ^^^^
+    |
+    = note: `Struct` has a derived impl for the trait `Clone`, but this is intentionally ignored during dead code analysis
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `ulib_zeroable_derive` (lib) generated 1 warning
+warning: gem@0.1.0: csrc/macros.cuh:138: warning: ignoring '#pragma unroll ' [-Wunknown-pragmas]
+warning: gem@0.1.0:   138 |     for (int i = 0; i < GEM_CARRY4_BITS; ++i) {
+warning: gem@0.1.0:       |
+warning: hiding a lifetime that's elided elsewhere is confusing
+  --> eda-infra-rs/netlistdb/src/hier_name.rs:81:17
+   |
+81 |     pub fn iter(&self) -> HierNameRevIter {
+   |                 ^^^^^     ^^^^^^^^^^^^^^^ the same lifetime is hidden here
+   |                 |
+   |                 the lifetime is elided here
+   |
+   = help: the same lifetime is referred to in inconsistent ways, making the signature confusing
+   = note: `#[warn(mismatched_lifetime_syntaxes)]` on by default
+help: use `'_` for type paths
+   |
+81 |     pub fn iter(&self) -> HierNameRevIter<'_> {
+   |                                          ++++
+
+warning: hiding a lifetime that's elided elsewhere is confusing
+   --> eda-infra-rs/netlistdb/src/hier_name.rs:159:19
+    |
+159 |     fn ident_iter(&self) -> DynIter<&str>;
+    |                   ^^^^^     ^^^^^^^^^^^^^
+    |                   |         |       |
+    |                   |         |       the same lifetime is elided here
+    |                   |         the same lifetime is hidden here
+    |                   the lifetime is elided here
+    |
+    = help: the same lifetime is referred to in inconsistent ways, making the signature confusing
+help: use `'_` for type paths
+    |
+159 |     fn ident_iter(&self) -> DynIter<'_, &str>;
+    |                                     +++
+
+warning: hiding a lifetime that's elided elsewhere is confusing
+   --> eda-infra-rs/netlistdb/src/hier_name.rs:175:19
+    |
+175 |     fn ident_iter(&self) -> DynIter<&str> {
+    |                   ^^^^^     ^^^^^^^^^^^^^
+    |                   |         |       |
+    |                   |         |       the same lifetime is elided here
+    |                   |         the same lifetime is hidden here
+    |                   the lifetime is elided here
+    |
+    = help: the same lifetime is referred to in inconsistent ways, making the signature confusing
+help: use `'_` for type paths
+    |
+175 |     fn ident_iter(&self) -> DynIter<'_, &str> {
+    |                                     +++
+
+warning: hiding a lifetime that's elided elsewhere is confusing
+   --> eda-infra-rs/vcd-ng/src/lib.rs:394:17
+    |
+394 |     pub fn iter(&self) -> VecValueIter {
+    |                 ^^^^^     ^^^^^^^^^^^^ the same lifetime is hidden here
+    |                 |
+    |                 the lifetime is elided here
+    |
+    = help: the same lifetime is referred to in inconsistent ways, making the signature confusing
+    = note: `#[warn(mismatched_lifetime_syntaxes)]` on by default
+help: use `'_` for type paths
+    |
+394 |     pub fn iter(&self) -> VecValueIter<'_> {
+    |                                       ++++
+
+warning: `netlistdb` (lib) generated 3 warnings (run `cargo fix --lib -p netlistdb` to apply 3 suggestions)
+warning: `vcd-ng` (lib) generated 1 warning (run `cargo fix --lib -p vcd-ng` to apply 1 suggestion)
+   Compiling gem v0.1.0 (/home/chethanakotla1003/Desktop/GEM)
+warning: variable does not need to be mutable
+   --> src/flatten.rs:633:21
+    |
+633 |                 let mut check = |what: &str, i: usize, p: u32| {
+    |                     ----^^^^^
+    |                     |
+    |                     help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: hiding a lifetime that's elided elsewhere is confusing
+   --> src/aig.rs:782:31
+    |
+782 | ...nt_group(&self, endpt_id: usize) -> EndpointGroup {
+    |             ^^^^^                      ^^^^^^^^^^^^^ the same lifetime is hidden here
+    |             |
+    |             the lifetime is elided here
+    |
+    = help: the same lifetime is referred to in inconsistent ways, making the signature confusing
+    = note: `#[warn(mismatched_lifetime_syntaxes)]` on by default
+help: use `'_` for type paths
+    |
+782 |     pub fn get_endpoint_group(&self, endpt_id: usize) -> EndpointGroup<'_> {
+    |                                                                       ++++
+
+warning: `gem` (lib) generated 2 warnings (run `cargo fix --lib -p gem` to apply 2 suggestions)
+warning: hiding a lifetime that's elided elsewhere is confusing
+   --> src/bin/naive_sim.rs:110:13
+    |
+110 |     fn iter(&self) -> VCDHierRevIter {
+    |             ^^^^^     ^^^^^^^^^^^^^^ the same lifetime is hidden here
+    |             |
+    |             the lifetime is elided here
+    |
+    = help: the same lifetime is referred to in inconsistent ways, making the signature confusing
+    = note: `#[warn(mismatched_lifetime_syntaxes)]` on by default
+help: use `'_` for type paths
+    |
+110 |     fn iter(&self) -> VCDHierRevIter<'_> {
+    |                                     ++++
+
+warning: value assigned to `script_pi` is never read
+   --> src/bin/cuda_test.rs:403:9
+    |
+403 |         script_pi += 256 * 4;
+    |         ^^^^^^^^^^^^^^^^^^^^ this value is reassigned later and never used
+...
+432 |         script_pi = part_start + script[part_start + 10] as usize;
+    |         --------------------------------------------------------- `script_pi` is overwritten here before the previous value is read
+    |
+    = note: `#[warn(unused_assignments)]` (part of `#[warn(unused)]`) on by default
+
+warning: hiding a lifetime that's elided elsewhere is confusing
+   --> src/bin/cuda_test.rs:126:13
+    |
+126 |     fn iter(&self) -> VCDHierRevIter {
+    |             ^^^^^     ^^^^^^^^^^^^^^ the same lifetime is hidden here
+    |             |
+    |             the lifetime is elided here
+    |
+    = help: the same lifetime is referred to in inconsistent ways, making the signature confusing
+    = note: `#[warn(mismatched_lifetime_syntaxes)]` on by default
+help: use `'_` for type paths
+    |
+126 |     fn iter(&self) -> VCDHierRevIter<'_> {
+    |                                     ++++
+
+warning: hiding a lifetime that's elided elsewhere is confusing
+   --> src/bin/flatten_test.rs:387:13
+    |
+387 |     fn iter(&self) -> VCDHierRevIter {
+    |             ^^^^^     ^^^^^^^^^^^^^^ the same lifetime is hidden here
+    |             |
+    |             the lifetime is elided here
+    |
+    = help: the same lifetime is referred to in inconsistent ways, making the signature confusing
+    = note: `#[warn(mismatched_lifetime_syntaxes)]` on by default
+help: use `'_` for type paths
+    |
+387 |     fn iter(&self) -> VCDHierRevIter<'_> {
+    |                                     ++++
+
+warning: `gem` (bin "naive_sim") generated 1 warning (run `cargo fix --bin "naive_sim" -p gem` to apply 1 suggestion)
+warning: `gem` (bin "flatten_test") generated 1 warning (run `cargo fix --bin "flatten_test" -p gem` to apply 1 suggestion)
+warning: `gem` (bin "cuda_test") generated 2 warnings (run `cargo fix --bin "cuda_test" -p gem` to apply 1 suggestion)
+    Finished `release` profile [optimized] target(s) in 9.64s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+23:00:12 [0m[34m[INFO] [0mSimulator args:
+SimulatorArgs {
+    netlist_verilog: "build_native/gatelevel.gv",
+    top_module: Some(
+        "macro_smoke",
+    ),
+    level_split: [],
+    gemparts: "build_native/r.gemparts",
+    input_vcd: "build_native/in.vcd",
+    input_vcd_scope: None,
+    output_vcd: "build_native/out.vcd",
+    output_vcd_scope: None,
+    num_blocks: 40,
+    check_with_cpu: false,
+    max_cycles: None,
+}
+23:00:12 [0m[34m[INFO] [0minferred clock port clk (posedge)
+23:00:12 [0m[34m[INFO] [0m# of effective partitions in each stage: [1, 1]
+23:00:12 [0m[36m[DEBUG] [0mgem::flatten: [src/flatten.rs:1091] major stage 0: max total boomerang depth (w/ cost) 7
+23:00:12 [0m[36m[DEBUG] [0mgem::flatten: [src/flatten.rs:1091] major stage 1: max total boomerang depth (w/ cost) 4
+23:00:12 [0m[34m[INFO] [0mMacro word-state: 64 u64 (512 bytes, 64-bit aligned), 7 macros, 458 descriptor words
+23:00:12 [0m[34m[INFO] [0mBuilt script for 40 blocks, reg/io state size 277, sram size 0, script size 69660
+Script hash: 11582104925464474575
+23:00:12 [0m[34m[INFO] [0mtotal number of cycles: 2001
+23:00:15 [0m[34m[INFO] [0mmacro word-state: 64 u64 (512 bytes) at 0x72f0c1400000, 7 macros
+23:00:15 [0m[36m[DEBUG] [0mTimerStarting: [src/bin/cuda_test.rs:713] simulation
+23:00:15 [0m[36m[DEBUG] [0mTimerFinished: [src/bin/cuda_test.rs:713] simulation, Elapsed=81.940851ms
+23:00:15 [0m[34m[INFO] [0mwrite out vcd
+
+DIFF acc0[0]: 559 reference vs 567 candidate samples
+    [1] ref=(1500, '1')  cand=(21500, '1')
+    [2] ref=(2500, '0')  cand=(22500, '0')
+    [3] ref=(12500, '1')  cand=(23500, '1')
+    [4] ref=(16500, '0')  cand=(30500, '0')
+    [5] ref=(21500, '1')  cand=(31500, '1')
+    [6] ref=(30500, '0')  cand=(32500, '0')
+    [7] ref=(32500, '1')  cand=(34500, '1')
+    [8] ref=(33500, '0')  cand=(35500, '0')
+    [9] ref=(35500, '1')  cand=(40500, '1')
+    [10] ref=(39500, '0')  cand=(50500, '0')
+    ...
+
+DIFF acc0[10]: 986 reference vs 1000 candidate samples
+    [2] ref=(2500, '0')  cand=(1500, '0')
+    [3] ref=(3500, '1')  cand=(2500, '1')
+    [5] ref=(5500, '1')  cand=(7500, '1')
+    [9] ref=(16500, '1')  cand=(15500, '1')
+    [10] ref=(19500, '0')  cand=(17500, '0')
+    [11] ref=(20500, '1')  cand=(18500, '1')
+    [12] ref=(22500, '0')  cand=(19500, '0')
+    [13] ref=(29500, '1')  cand=(20500, '1')
+    [14] ref=(31500, '0')  cand=(23500, '0')
+    [15] ref=(34500, '1')  cand=(24500, '1')
+    ...
+
+DIFF acc0[11]: 1009 reference vs 1009 candidate samples
+    [2] ref=(1500, '0')  cand=(2500, '0')
+    [3] ref=(2500, '1')  cand=(11500, '1')
+    [4] ref=(3500, '0')  cand=(17500, '0')
+    [5] ref=(4500, '1')  cand=(19500, '1')
+    [6] ref=(5500, '0')  cand=(23500, '0')
+    [7] ref=(6500, '1')  cand=(27500, '1')
+    [8] ref=(9500, '0')  cand=(28500, '0')
+    [9] ref=(10500, '1')  cand=(29500, '1')
+    [10] ref=(13500, '0')  cand=(32500, '0')
+    [11] ref=(16500, '1')  cand=(36500, '1')
+    ...
+
+DIFF acc0[12]: 1042 reference vs 1018 candidate samples
+    [2] ref=(3500, '0')  cand=(1500, '0')
+    [3] ref=(5500, '1')  cand=(2500, '1')
+    [4] ref=(6500, '0')  cand=(3500, '0')
+    [5] ref=(9500, '1')  cand=(4500, '1')
+    [6] ref=(13500, '0')  cand=(6500, '0')
+    [7] ref=(16500, '1')  cand=(7500, '1')
+    [8] ref=(20500, '0')  cand=(8500, '0')
+    [9] ref=(21500, '1')  cand=(9500, '1')
+    [10] ref=(25500, '0')  cand=(14500, '0')
+    [11] ref=(26500, '1')  cand=(15500, '1')
+    ...
+
+DIFF acc0[13]: 1034 reference vs 1016 candidate samples
+    [1] ref=(2500, '1')  cand=(1500, '1')
+    [2] ref=(3500, '0')  cand=(2500, '0')
+    [3] ref=(5500, '1')  cand=(3500, '1')
+    [4] ref=(7500, '0')  cand=(4500, '0')
+    [5] ref=(11500, '1')  cand=(6500, '1')
+    [6] ref=(12500, '0')  cand=(7500, '0')
+    [7] ref=(13500, '1')  cand=(9500, '1')
+    [8] ref=(15500, '0')  cand=(10500, '0')
+    [9] ref=(16500, '1')  cand=(11500, '1')
+    [10] ref=(17500, '0')  cand=(12500, '0')
+    ...
+
+DIFF acc0[14]: 1016 reference vs 1010 candidate samples
+    [2] ref=(7500, '0')  cand=(3500, '0')
+    [3] ref=(8500, '1')  cand=(6500, '1')
+    [4] ref=(11500, '0')  cand=(7500, '0')
+    [5] ref=(12500, '1')  cand=(11500, '1')
+    [6] ref=(13500, '0')  cand=(12500, '0')
+    [7] ref=(14500, '1')  cand=(13500, '1')
+    [8] ref=(19500, '0')  cand=(15500, '0')
+    [9] ref=(21500, '1')  cand=(16500, '1')
+    [10] ref=(22500, '0')  cand=(18500, '0')
+    [11] ref=(23500, '1')  cand=(21500, '1')
+    ...
+
+DIFF acc0[15]: 1024 reference vs 968 candidate samples
+    [2] ref=(1500, '0')  cand=(2500, '0')
+    [3] ref=(5500, '1')  cand=(3500, '1')
+    [4] ref=(8500, '0')  cand=(4500, '0')
+    [5] ref=(12500, '1')  cand=(8500, '1')
+    [6] ref=(13500, '0')  cand=(11500, '0')
+    [7] ref=(16500, '1')  cand=(12500, '1')
+    [8] ref=(17500, '0')  cand=(13500, '0')
+    [9] ref=(18500, '1')  cand=(15500, '1')
+    [10] ref=(20500, '0')  cand=(17500, '0')
+    [11] ref=(21500, '1')  cand=(18500, '1')
+    ...
+
+DIFF acc0[16]: 1012 reference vs 976 candidate samples
+    [3] ref=(2500, '1')  cand=(3500, '1')
+    [4] ref=(3500, '0')  cand=(10500, '0')
+    [5] ref=(4500, '1')  cand=(11500, '1')
+    [6] ref=(7500, '0')  cand=(12500, '0')
+    [8] ref=(15500, '0')  cand=(14500, '0')
+    [10] ref=(18500, '0')  cand=(21500, '0')
+    [11] ref=(19500, '1')  cand=(23500, '1')
+    [12] ref=(20500, '0')  cand=(26500, '0')
+    [13] ref=(21500, '1')  cand=(27500, '1')
+    [14] ref=(22500, '0')  cand=(32500, '0')
+    ...
+
+DIFF acc0[17]: 1016 reference vs 982 candidate samples
+    [4] ref=(5500, '0')  cand=(7500, '0')
+    [5] ref=(10500, '1')  cand=(8500, '1')
+    [6] ref=(11500, '0')  cand=(9500, '0')
+    [7] ref=(13500, '1')  cand=(12500, '1')
+    [8] ref=(16500, '0')  cand=(13500, '0')
+    [9] ref=(17500, '1')  cand=(16500, '1')
+    [10] ref=(19500, '0')  cand=(17500, '0')
+    [11] ref=(20500, '1')  cand=(18500, '1')
+    [12] ref=(23500, '0')  cand=(21500, '0')
+    [13] ref=(24500, '1')  cand=(22500, '1')
+    ...
+
+DIFF acc0[18]: 976 reference vs 998 candidate samples
+    [2] ref=(4500, '0')  cand=(1500, '0')
+    [3] ref=(6500, '1')  cand=(2500, '1')
+    [4] ref=(12500, '0')  cand=(4500, '0')
+    [5] ref=(13500, '1')  cand=(6500, '1')
+    [6] ref=(14500, '0')  cand=(7500, '0')
+    [7] ref=(16500, '1')  cand=(9500, '1')
+    [8] ref=(17500, '0')  cand=(10500, '0')
+    [9] ref=(21500, '1')  cand=(13500, '1')
+    [10] ref=(25500, '0')  cand=(14500, '0')
+    [11] ref=(27500, '1')  cand=(15500, '1')
+    ...
+
+DIFF acc0[19]: 986 reference vs 1014 candidate samples
+    [1] ref=(1500, '1')  cand=(2500, '1')
+    [2] ref=(2500, '0')  cand=(3500, '0')
+    [3] ref=(3500, '1')  cand=(7500, '1')
+    [4] ref=(7500, '0')  cand=(9500, '0')
+    [5] ref=(8500, '1')  cand=(10500, '1')
+    [6] ref=(10500, '0')  cand=(12500, '0')
+    [7] ref=(11500, '1')  cand=(14500, '1')
+    [8] ref=(13500, '0')  cand=(15500, '0')
+    [9] ref=(14500, '1')  cand=(17500, '1')
+    [10] ref=(17500, '0')  cand=(18500, '0')
+    ...
+
+DIFF acc0[1]: 794 reference vs 796 candidate samples
+    [1] ref=(1500, '1')  cand=(8500, '1')
+    [2] ref=(2500, '0')  cand=(12500, '0')
+    [3] ref=(5500, '1')  cand=(15500, '1')
+    [4] ref=(6500, '0')  cand=(16500, '0')
+    [5] ref=(8500, '1')  cand=(21500, '1')
+    [6] ref=(11500, '0')  cand=(25500, '0')
+    [7] ref=(14500, '1')  cand=(26500, '1')
+    [8] ref=(16500, '0')  cand=(36500, '0')
+    [9] ref=(22500, '1')  cand=(37500, '1')
+    [10] ref=(24500, '0')  cand=(38500, '0')
+    ...
+
+DIFF acc0[20]: 1031 reference vs 991 candidate samples
+    [2] ref=(3500, '0')  cand=(2500, '0')
+    [3] ref=(5500, '1')  cand=(4500, '1')
+    [4] ref=(6500, '0')  cand=(5500, '0')
+    [5] ref=(7500, '1')  cand=(6500, '1')
+    [6] ref=(12500, '0')  cand=(9500, '0')
+    [8] ref=(14500, '0')  cand=(16500, '0')
+    [9] ref=(15500, '1')  cand=(17500, '1')
+    [10] ref=(17500, '0')  cand=(18500, '0')
+    [11] ref=(18500, '1')  cand=(20500, '1')
+    [12] ref=(20500, '0')  cand=(21500, '0')
+    ...
+
+DIFF acc0[21]: 971 reference vs 1001 candidate samples
+    [3] ref=(3500, '1')  cand=(4500, '1')
+    [4] ref=(7500, '0')  cand=(5500, '0')
+    [5] ref=(11500, '1')  cand=(6500, '1')
+    [6] ref=(12500, '0')  cand=(8500, '0')
+    [7] ref=(13500, '1')  cand=(9500, '1')
+    [8] ref=(14500, '0')  cand=(10500, '0')
+    [9] ref=(19500, '1')  cand=(12500, '1')
+    [10] ref=(20500, '0')  cand=(13500, '0')
+    [11] ref=(21500, '1')  cand=(14500, '1')
+    [12] ref=(22500, '0')  cand=(16500, '0')
+    ...
+
+DIFF acc0[22]: 1015 reference vs 955 candidate samples
+    [1] ref=(2500, '1')  cand=(1500, '1')
+    [2] ref=(3500, '0')  cand=(4500, '0')
+    [3] ref=(4500, '1')  cand=(5500, '1')
+    [5] ref=(10500, '1')  cand=(9500, '1')
+    [6] ref=(12500, '0')  cand=(11500, '0')
+    [7] ref=(15500, '1')  cand=(12500, '1')
+    [8] ref=(16500, '0')  cand=(15500, '0')
+    [11] ref=(22500, '1')  cand=(20500, '1')
+    [12] ref=(24500, '0')  cand=(21500, '0')
+    [13] ref=(31500, '1')  cand=(22500, '1')
+    ...
+
+DIFF acc0[23]: 976 reference vs 996 candidate samples
+    [2] ref=(4500, '0')  cand=(3500, '0')
+    [3] ref=(7500, '1')  cand=(5500, '1')
+    [4] ref=(9500, '0')  cand=(6500, '0')
+    [5] ref=(10500, '1')  cand=(9500, '1')
+    [6] ref=(14500, '0')  cand=(10500, '0')
+    [7] ref=(18500, '1')  cand=(11500, '1')
+    [8] ref=(20500, '0')  cand=(12500, '0')
+    [9] ref=(22500, '1')  cand=(13500, '1')
+    [10] ref=(23500, '0')  cand=(14500, '0')
+    [11] ref=(24500, '1')  cand=(15500, '1')
+    ...
+
+DIFF acc0[24]: 965 reference vs 1027 candidate samples
+    [2] ref=(2500, '0')  cand=(3500, '0')
+    [3] ref=(3500, '1')  cand=(4500, '1')
+    [7] ref=(12500, '1')  cand=(9500, '1')
+    [8] ref=(13500, '0')  cand=(10500, '0')
+    [9] ref=(15500, '1')  cand=(11500, '1')
+    [10] ref=(18500, '0')  cand=(13500, '0')
+    [11] ref=(19500, '1')  cand=(15500, '1')
+    [12] ref=(20500, '0')  cand=(17500, '0')
+    [13] ref=(24500, '1')  cand=(20500, '1')
+    [14] ref=(25500, '0')  cand=(26500, '0')
+    ...
+
+DIFF acc0[25]: 1004 reference vs 974 candidate samples
+    [1] ref=(1500, '1')  cand=(3500, '1')
+    [2] ref=(9500, '0')  cand=(4500, '0')
+    [3] ref=(11500, '1')  cand=(5500, '1')
+    [4] ref=(12500, '0')  cand=(6500, '0')
+    [5] ref=(15500, '1')  cand=(9500, '1')
+    [6] ref=(17500, '0')  cand=(13500, '0')
+    [7] ref=(18500, '1')  cand=(14500, '1')
+    [8] ref=(22500, '0')  cand=(16500, '0')
+    [9] ref=(23500, '1')  cand=(22500, '1')
+    [10] ref=(24500, '0')  cand=(23500, '0')
+    ...
+
+DIFF acc0[26]: 1009 reference vs 983 candidate samples
+    [2] ref=(1500, '0')  cand=(2500, '0')
+    [4] ref=(5500, '0')  cand=(4500, '0')
+    [5] ref=(6500, '1')  cand=(5500, '1')
+    [6] ref=(8500, '0')  cand=(6500, '0')
+    [7] ref=(12500, '1')  cand=(8500, '1')
+    [8] ref=(14500, '0')  cand=(10500, '0')
+    [9] ref=(15500, '1')  cand=(11500, '1')
+    [10] ref=(17500, '0')  cand=(13500, '0')
+    [11] ref=(18500, '1')  cand=(15500, '1')
+    [12] ref=(19500, '0')  cand=(17500, '0')
+    ...
+
+DIFF acc0[27]: 1005 reference vs 1013 candidate samples
+    [2] ref=(2500, '0')  cand=(4500, '0')
+    [3] ref=(3500, '1')  cand=(7500, '1')
+    [4] ref=(4500, '0')  cand=(9500, '0')
+    [5] ref=(6500, '1')  cand=(11500, '1')
+    [6] ref=(7500, '0')  cand=(12500, '0')
+    [7] ref=(8500, '1')  cand=(13500, '1')
+    [8] ref=(10500, '0')  cand=(14500, '0')
+    [9] ref=(11500, '1')  cand=(18500, '1')
+    [10] ref=(12500, '0')  cand=(21500, '0')
+    [11] ref=(13500, '1')  cand=(22500, '1')
+    ...
+
+DIFF acc0[28]: 983 reference vs 951 candidate samples
+    [3] ref=(8500, '1')  cand=(3500, '1')
+    [4] ref=(9500, '0')  cand=(6500, '0')
+    [5] ref=(10500, '1')  cand=(7500, '1')
+    [6] ref=(11500, '0')  cand=(8500, '0')
+    [7] ref=(13500, '1')  cand=(11500, '1')
+    [8] ref=(14500, '0')  cand=(13500, '0')
+    [9] ref=(15500, '1')  cand=(14500, '1')
+    [10] ref=(20500, '0')  cand=(15500, '0')
+    [11] ref=(22500, '1')  cand=(16500, '1')
+    [12] ref=(23500, '0')  cand=(18500, '0')
+    ...
+
+DIFF acc0[29]: 1023 reference vs 1035 candidate samples
+    [4] ref=(5500, '0')  cand=(8500, '0')
+    [5] ref=(6500, '1')  cand=(10500, '1')
+    [6] ref=(7500, '0')  cand=(11500, '0')
+    [7] ref=(8500, '1')  cand=(12500, '1')
+    [8] ref=(9500, '0')  cand=(13500, '0')
+    [9] ref=(11500, '1')  cand=(14500, '1')
+    [10] ref=(12500, '0')  cand=(16500, '0')
+    [11] ref=(19500, '1')  cand=(20500, '1')
+    [12] ref=(20500, '0')  cand=(21500, '0')
+    [13] ref=(21500, '1')  cand=(22500, '1')
+    ...
+
+DIFF acc0[2]: 879 reference vs 915 candidate samples
+    [1] ref=(1500, '1')  cand=(5500, '1')
+    [2] ref=(2500, '0')  cand=(7500, '0')
+    [3] ref=(3500, '1')  cand=(8500, '1')
+    [4] ref=(5500, '0')  cand=(9500, '0')
+    [5] ref=(6500, '1')  cand=(11500, '1')
+    [6] ref=(7500, '0')  cand=(14500, '0')
+    [7] ref=(8500, '1')  cand=(15500, '1')
+    [8] ref=(11500, '0')  cand=(16500, '0')
+    [9] ref=(12500, '1')  cand=(19500, '1')
+    [10] ref=(13500, '0')  cand=(20500, '0')
+    ...
+
+DIFF acc0[30]: 991 reference vs 981 candidate samples
+    [1] ref=(3500, '1')  cand=(2500, '1')
+    [2] ref=(4500, '0')  cand=(3500, '0')
+    [3] ref=(5500, '1')  cand=(6500, '1')
+    [4] ref=(7500, '0')  cand=(8500, '0')
+    [5] ref=(8500, '1')  cand=(9500, '1')
+    [6] ref=(10500, '0')  cand=(15500, '0')
+    [7] ref=(11500, '1')  cand=(16500, '1')
+    [8] ref=(15500, '0')  cand=(17500, '0')
+    [9] ref=(16500, '1')  cand=(20500, '1')
+    [10] ref=(26500, '0')  cand=(23500, '0')
+    ...
+
+DIFF acc0[31]: 1024 reference vs 994 candidate samples
+    [1] ref=(2500, '1')  cand=(3500, '1')
+    [3] ref=(6500, '1')  cand=(5500, '1')
+    [4] ref=(8500, '0')  cand=(6500, '0')
+    [5] ref=(11500, '1')  cand=(8500, '1')
+    [6] ref=(16500, '0')  cand=(9500, '0')
+    [7] ref=(21500, '1')  cand=(10500, '1')
+    [8] ref=(23500, '0')  cand=(11500, '0')
+    [9] ref=(24500, '1')  cand=(13500, '1')
+    [10] ref=(25500, '0')  cand=(16500, '0')
+    [11] ref=(31500, '1')  cand=(19500, '1')
+    ...
+
+DIFF acc0[32]: 959 reference vs 971 candidate samples
+    [1] ref=(2500, '1')  cand=(5500, '1')
+    [2] ref=(3500, '0')  cand=(10500, '0')
+    [3] ref=(5500, '1')  cand=(11500, '1')
+    [4] ref=(6500, '0')  cand=(12500, '0')
+    [5] ref=(13500, '1')  cand=(14500, '1')
+    [6] ref=(14500, '0')  cand=(15500, '0')
+    [7] ref=(16500, '1')  cand=(17500, '1')
+    [8] ref=(17500, '0')  cand=(20500, '0')
+    [11] ref=(23500, '1')  cand=(24500, '1')
+    [12] ref=(24500, '0')  cand=(25500, '0')
+    ...
+
+DIFF acc0[33]: 1034 reference vs 1012 candidate samples
+    [2] ref=(3500, '0')  cand=(4500, '0')
+    [3] ref=(4500, '1')  cand=(7500, '1')
+    [4] ref=(5500, '0')  cand=(9500, '0')
+    [5] ref=(6500, '1')  cand=(12500, '1')
+    [6] ref=(7500, '0')  cand=(13500, '0')
+    [7] ref=(8500, '1')  cand=(15500, '1')
+    [8] ref=(10500, '0')  cand=(19500, '0')
+    [9] ref=(12500, '1')  cand=(25500, '1')
+    [10] ref=(13500, '0')  cand=(27500, '0')
+    [11] ref=(16500, '1')  cand=(29500, '1')
+    ...
+
+DIFF acc0[34]: 1029 reference vs 1033 candidate samples
+    [2] ref=(3500, '0')  cand=(1500, '0')
+    [3] ref=(7500, '1')  cand=(2500, '1')
+    [4] ref=(8500, '0')  cand=(3500, '0')
+    [5] ref=(10500, '1')  cand=(4500, '1')
+    [6] ref=(15500, '0')  cand=(5500, '0')
+    [7] ref=(16500, '1')  cand=(7500, '1')
+    [8] ref=(17500, '0')  cand=(8500, '0')
+    [9] ref=(18500, '1')  cand=(10500, '1')
+    [10] ref=(20500, '0')  cand=(14500, '0')
+    [11] ref=(22500, '1')  cand=(15500, '1')
+    ...
+
+DIFF acc0[35]: 1004 reference vs 990 candidate samples
+    [2] ref=(1500, '0')  cand=(2500, '0')
+    [3] ref=(2500, '1')  cand=(3500, '1')
+    [4] ref=(4500, '0')  cand=(8500, '0')
+    [6] ref=(11500, '0')  cand=(12500, '0')
+    [7] ref=(12500, '1')  cand=(13500, '1')
+    [8] ref=(13500, '0')  cand=(17500, '0')
+    [9] ref=(14500, '1')  cand=(18500, '1')
+    [10] ref=(17500, '0')  cand=(19500, '0')
+    [11] ref=(18500, '1')  cand=(21500, '1')
+    [12] ref=(19500, '0')  cand=(22500, '0')
+    ...
+
+DIFF acc0[36]: 998 reference vs 972 candidate samples
+    [2] ref=(1500, '0')  cand=(3500, '0')
+    [3] ref=(3500, '1')  cand=(6500, '1')
+    [4] ref=(4500, '0')  cand=(9500, '0')
+    [5] ref=(6500, '1')  cand=(12500, '1')
+    [6] ref=(7500, '0')  cand=(18500, '0')
+    [7] ref=(8500, '1')  cand=(20500, '1')
+    [8] ref=(9500, '0')  cand=(21500, '0')
+    [9] ref=(10500, '1')  cand=(22500, '1')
+    [10] ref=(12500, '0')  cand=(23500, '0')
+    [11] ref=(17500, '1')  cand=(24500, '1')
+    ...
+
+DIFF acc0[37]: 1002 reference vs 958 candidate samples
+    [2] ref=(1500, '0')  cand=(2500, '0')
+    [3] ref=(2500, '1')  cand=(5500, '1')
+    [4] ref=(4500, '0')  cand=(8500, '0')
+    [5] ref=(5500, '1')  cand=(9500, '1')
+    [6] ref=(7500, '0')  cand=(10500, '0')
+    [7] ref=(8500, '1')  cand=(14500, '1')
+    [8] ref=(9500, '0')  cand=(17500, '0')
+    [9] ref=(10500, '1')  cand=(19500, '1')
+    [10] ref=(14500, '0')  cand=(20500, '0')
+    [11] ref=(17500, '1')  cand=(21500, '1')
+    ...
+
+DIFF acc0[38]: 961 reference vs 987 candidate samples
+    [1] ref=(2500, '1')  cand=(1500, '1')
+    [2] ref=(7500, '0')  cand=(2500, '0')
+    [3] ref=(14500, '1')  cand=(3500, '1')
+    [4] ref=(17500, '0')  cand=(4500, '0')
+    [5] ref=(18500, '1')  cand=(5500, '1')
+    [6] ref=(19500, '0')  cand=(8500, '0')
+    [7] ref=(25500, '1')  cand=(11500, '1')
+    [8] ref=(27500, '0')  cand=(12500, '0')
+    [9] ref=(28500, '1')  cand=(14500, '1')
+    [10] ref=(29500, '0')  cand=(15500, '0')
+    ...
+
+DIFF acc0[39]: 980 reference vs 998 candidate samples
+    [1] ref=(3500, '1')  cand=(4500, '1')
+    [2] ref=(4500, '0')  cand=(7500, '0')
+    [3] ref=(5500, '1')  cand=(11500, '1')
+    [4] ref=(8500, '0')  cand=(12500, '0')
+    [5] ref=(9500, '1')  cand=(13500, '1')
+    [6] ref=(10500, '0')  cand=(14500, '0')
+    [7] ref=(11500, '1')  cand=(15500, '1')
+    [8] ref=(14500, '0')  cand=(16500, '0')
+    [9] ref=(15500, '1')  cand=(20500, '1')
+    [10] ref=(17500, '0')  cand=(23500, '0')
+    ...
+
+DIFF acc0[3]: 938 reference vs 908 candidate samples
+    [1] ref=(3500, '1')  cand=(1500, '1')
+    [2] ref=(7500, '0')  cand=(2500, '0')
+    [3] ref=(11500, '1')  cand=(9500, '1')
+    [4] ref=(12500, '0')  cand=(13500, '0')
+    [7] ref=(20500, '1')  cand=(18500, '1')
+    [8] ref=(22500, '0')  cand=(21500, '0')
+    [9] ref=(25500, '1')  cand=(22500, '1')
+    [10] ref=(26500, '0')  cand=(24500, '0')
+    [11] ref=(27500, '1')  cand=(25500, '1')
+    [12] ref=(29500, '0')  cand=(26500, '0')
+    ...
+
+DIFF acc0[40]: 991 reference vs 967 candidate samples
+    [2] ref=(4500, '0')  cand=(1500, '0')
+    [3] ref=(9500, '1')  cand=(3500, '1')
+    [4] ref=(11500, '0')  cand=(7500, '0')
+    [5] ref=(14500, '1')  cand=(8500, '1')
+    [6] ref=(15500, '0')  cand=(12500, '0')
+    [7] ref=(16500, '1')  cand=(13500, '1')
+    [8] ref=(17500, '0')  cand=(15500, '0')
+    [11] ref=(20500, '1')  cand=(21500, '1')
+    [12] ref=(21500, '0')  cand=(22500, '0')
+    [13] ref=(22500, '1')  cand=(23500, '1')
+    ...
+
+DIFF acc0[41]: 1042 reference vs 942 candidate samples
+    [3] ref=(4500, '1')  cand=(3500, '1')
+    [4] ref=(8500, '0')  cand=(7500, '0')
+    [7] ref=(11500, '1')  cand=(12500, '1')
+    [8] ref=(13500, '0')  cand=(14500, '0')
+    [9] ref=(14500, '1')  cand=(15500, '1')
+    [10] ref=(15500, '0')  cand=(16500, '0')
+    [11] ref=(16500, '1')  cand=(21500, '1')
+    [12] ref=(17500, '0')  cand=(22500, '0')
+    [13] ref=(19500, '1')  cand=(26500, '1')
+    [14] ref=(21500, '0')  cand=(27500, '0')
+    ...
+
+DIFF acc0[42]: 1016 reference vs 826 candidate samples
+    [1] ref=(3500, '1')  cand=(2500, '1')
+    [2] ref=(10500, '0')  cand=(7500, '0')
+    [3] ref=(11500, '1')  cand=(10500, '1')
+    [4] ref=(13500, '0')  cand=(14500, '0')
+    [5] ref=(15500, '1')  cand=(17500, '1')
+    [6] ref=(20500, '0')  cand=(18500, '0')
+    [7] ref=(21500, '1')  cand=(20500, '1')
+    [8] ref=(22500, '0')  cand=(21500, '0')
+    [9] ref=(23500, '1')  cand=(22500, '1')
+    [11] ref=(31500, '1')  cand=(29500, '1')
+    ...
+
+DIFF acc0[43]: 757 reference vs 549 candidate samples
+    [1] ref=(13500, '1')  cand=(7500, '1')
+    [2] ref=(21500, '0')  cand=(14500, '0')
+    [5] ref=(29500, '1')  cand=(31500, '1')
+    [6] ref=(37500, '0')  cand=(36500, '0')
+    [7] ref=(38500, '1')  cand=(37500, '1')
+    [8] ref=(41500, '0')  cand=(39500, '0')
+    [10] ref=(49500, '0')  cand=(47500, '0')
+    [12] ref=(57500, '0')  cand=(58500, '0')
+    [16] ref=(65500, '0')  cand=(67500, '0')
+    [17] ref=(67500, '1')  cand=(73500, '1')
+    ...
+
+DIFF acc0[44]: 537 reference vs 301 candidate samples
+    [1] ref=(16500, '1')  cand=(14500, '1')
+    [2] ref=(21500, '0')  cand=(16500, '0')
+    [3] ref=(29500, '1')  cand=(33500, '1')
+    [4] ref=(41500, '0')  cand=(36500, '0')
+    [5] ref=(48500, '1')  cand=(47500, '1')
+    [6] ref=(49500, '0')  cand=(48500, '0')
+    [7] ref=(55500, '1')  cand=(58500, '1')
+    [8] ref=(57500, '0')  cand=(59500, '0')
+    [9] ref=(58500, '1')  cand=(67500, '1')
+    [10] ref=(59500, '0')  cand=(68500, '0')
+    ...
+
+DIFF acc0[45]: 444 reference vs 202 candidate samples
+    [1] ref=(16500, '1')  cand=(33500, '1')
+    [2] ref=(21500, '0')  cand=(36500, '0')
+    [3] ref=(29500, '1')  cand=(59500, '1')
+    [4] ref=(41500, '0')  cand=(68500, '0')
+    [5] ref=(48500, '1')  cand=(87500, '1')
+    [6] ref=(49500, '0')  cand=(103500, '0')
+    [7] ref=(55500, '1')  cand=(121500, '1')
+    [8] ref=(57500, '0')  cand=(136500, '0')
+    [9] ref=(59500, '1')  cand=(158500, '1')
+    [10] ref=(67500, '0')  cand=(162500, '0')
+    ...
+
+DIFF acc0[46]: 425 reference vs 177 candidate samples
+    [1] ref=(16500, '1')  cand=(26500, '1')
+    [2] ref=(21500, '0')  cand=(27500, '0')
+    [3] ref=(26500, '1')  cand=(33500, '1')
+    [4] ref=(27500, '0')  cand=(36500, '0')
+    [5] ref=(29500, '1')  cand=(59500, '1')
+    [6] ref=(41500, '0')  cand=(60500, '0')
+    [7] ref=(48500, '1')  cand=(111500, '1')
+    [8] ref=(49500, '0')  cand=(112500, '0')
+    [9] ref=(55500, '1')  cand=(130500, '1')
+    [10] ref=(57500, '0')  cand=(136500, '0')
+    ...
+
+DIFF acc0[47]: 310 reference vs 152 candidate samples
+    [2] ref=(21500, '0')  cand=(16500, '0')
+    [4] ref=(41500, '0')  cand=(29500, '0')
+    [5] ref=(48500, '1')  cand=(33500, '1')
+    [6] ref=(49500, '0')  cand=(36500, '0')
+    [7] ref=(55500, '1')  cand=(58500, '1')
+    [8] ref=(57500, '0')  cand=(68500, '0')
+    [9] ref=(58500, '1')  cand=(71500, '1')
+    [10] ref=(69500, '0')  cand=(74500, '0')
+    [11] ref=(71500, '1')  cand=(78500, '1')
+    [12] ref=(77500, '0')  cand=(103500, '0')
+    ...
+
+DIFF acc0[4]: 975 reference vs 955 candidate samples
+    [1] ref=(1500, '1')  cand=(3500, '1')
+    [2] ref=(2500, '0')  cand=(4500, '0')
+    [3] ref=(3500, '1')  cand=(6500, '1')
+    [4] ref=(4500, '0')  cand=(9500, '0')
+    [5] ref=(8500, '1')  cand=(11500, '1')
+    [6] ref=(9500, '0')  cand=(14500, '0')
+    [7] ref=(11500, '1')  cand=(15500, '1')
+    [9] ref=(18500, '1')  cand=(20500, '1')
+    [10] ref=(20500, '0')  cand=(22500, '0')
+    [11] ref=(22500, '1')  cand=(23500, '1')
+    ...
+
+DIFF acc0[5]: 1017 reference vs 1001 candidate samples
+    [2] ref=(2500, '0')  cand=(1500, '0')
+    [3] ref=(3500, '1')  cand=(2500, '1')
+    [4] ref=(4500, '0')  cand=(5500, '0')
+    [5] ref=(5500, '1')  cand=(6500, '1')
+    [8] ref=(11500, '0')  cand=(13500, '0')
+    [9] ref=(12500, '1')  cand=(14500, '1')
+    [10] ref=(14500, '0')  cand=(15500, '0')
+    [11] ref=(16500, '1')  cand=(24500, '1')
+    [12] ref=(17500, '0')  cand=(25500, '0')
+    [13] ref=(19500, '1')  cand=(27500, '1')
+    ...
+
+DIFF acc0[6]: 994 reference vs 972 candidate samples
+    [2] ref=(5500, '0')  cand=(2500, '0')
+    [3] ref=(7500, '1')  cand=(3500, '1')
+    [4] ref=(8500, '0')  cand=(5500, '0')
+    [5] ref=(9500, '1')  cand=(6500, '1')
+    [6] ref=(10500, '0')  cand=(7500, '0')
+    [7] ref=(11500, '1')  cand=(14500, '1')
+    [8] ref=(13500, '0')  cand=(17500, '0')
+    [9] ref=(14500, '1')  cand=(18500, '1')
+    [10] ref=(15500, '0')  cand=(19500, '0')
+    [11] ref=(16500, '1')  cand=(20500, '1')
+    ...
+
+DIFF acc0[7]: 999 reference vs 1001 candidate samples
+    [1] ref=(5500, '1')  cand=(3500, '1')
+    [2] ref=(9500, '0')  cand=(4500, '0')
+    [3] ref=(10500, '1')  cand=(5500, '1')
+    [4] ref=(11500, '0')  cand=(6500, '0')
+    [5] ref=(12500, '1')  cand=(7500, '1')
+    [6] ref=(13500, '0')  cand=(9500, '0')
+    [7] ref=(14500, '1')  cand=(11500, '1')
+    [8] ref=(16500, '0')  cand=(13500, '0')
+    [9] ref=(20500, '1')  cand=(23500, '1')
+    [10] ref=(21500, '0')  cand=(27500, '0')
+    ...
+
+DIFF acc0[8]: 1018 reference vs 952 candidate samples
+    [1] ref=(4500, '1')  cand=(2500, '1')
+    [2] ref=(5500, '0')  cand=(6500, '0')
+    [3] ref=(6500, '1')  cand=(7500, '1')
+    [4] ref=(8500, '0')  cand=(9500, '0')
+    [5] ref=(10500, '1')  cand=(11500, '1')
+    [6] ref=(12500, '0')  cand=(13500, '0')
+    [7] ref=(14500, '1')  cand=(15500, '1')
+    [8] ref=(15500, '0')  cand=(16500, '0')
+    [9] ref=(16500, '1')  cand=(18500, '1')
+    [10] ref=(17500, '0')  cand=(20500, '0')
+    ...
+
+DIFF acc0[9]: 1010 reference vs 1002 candidate samples
+    [2] ref=(6500, '0')  cand=(2500, '0')
+    [3] ref=(7500, '1')  cand=(3500, '1')
+    [4] ref=(9500, '0')  cand=(4500, '0')
+    [5] ref=(11500, '1')  cand=(5500, '1')
+    [6] ref=(13500, '0')  cand=(6500, '0')
+    [7] ref=(14500, '1')  cand=(7500, '1')
+    [8] ref=(20500, '0')  cand=(9500, '0')
+    [9] ref=(22500, '1')  cand=(12500, '1')
+    [10] ref=(23500, '0')  cand=(14500, '0')
+    [11] ref=(24500, '1')  cand=(16500, '1')
+    ...
+
+DIFF acc1[0]: 449 reference vs 1 candidate samples
+    [1] ref=(4500, '1')  cand=None
+    [2] ref=(6500, '0')  cand=None
+    [3] ref=(7500, '1')  cand=None
+    [4] ref=(8500, '0')  cand=None
+    [5] ref=(16500, '1')  cand=None
+    [6] ref=(18500, '0')  cand=None
+    [7] ref=(37500, '1')  cand=None
+    [8] ref=(38500, '0')  cand=None
+    [9] ref=(40500, '1')  cand=None
+    [10] ref=(45500, '0')  cand=None
+    ...
+
+DIFF acc1[10]: 1013 reference vs 1 candidate samples
+    [1] ref=(500, '1')  cand=None
+    [2] ref=(1500, '0')  cand=None
+    [3] ref=(2500, '1')  cand=None
+    [4] ref=(10500, '0')  cand=None
+    [5] ref=(11500, '1')  cand=None
+    [6] ref=(13500, '0')  cand=None
+    [7] ref=(19500, '1')  cand=None
+    [8] ref=(20500, '0')  cand=None
+    [9] ref=(21500, '1')  cand=None
+    [10] ref=(22500, '0')  cand=None
+    ...
+
+DIFF acc1[11]: 996 reference vs 1 candidate samples
+    [1] ref=(2500, '1')  cand=None
+    [2] ref=(6500, '0')  cand=None
+    [3] ref=(9500, '1')  cand=None
+    [4] ref=(12500, '0')  cand=None
+    [5] ref=(13500, '1')  cand=None
+    [6] ref=(17500, '0')  cand=None
+    [7] ref=(18500, '1')  cand=None
+    [8] ref=(19500, '0')  cand=None
+    [9] ref=(20500, '1')  cand=None
+    [10] ref=(22500, '0')  cand=None
+    ...
+
+DIFF acc1[12]: 987 reference vs 1 candidate samples
+    [1] ref=(500, '1')  cand=None
+    [2] ref=(1500, '0')  cand=None
+    [3] ref=(4500, '1')  cand=None
+    [4] ref=(5500, '0')  cand=None
+    [5] ref=(7500, '1')  cand=None
+    [6] ref=(10500, '0')  cand=None
+    [7] ref=(15500, '1')  cand=None
+    [8] ref=(16500, '0')  cand=None
+    [9] ref=(18500, '1')  cand=None
+    [10] ref=(19500, '0')  cand=None
+    ...
+
+DIFF acc1[13]: 1031 reference vs 1 candidate samples
+    [1] ref=(500, '1')  cand=None
+    [2] ref=(4500, '0')  cand=None
+    [3] ref=(8500, '1')  cand=None
+    [4] ref=(10500, '0')  cand=None
+    [5] ref=(11500, '1')  cand=None
+    [6] ref=(12500, '0')  cand=None
+    [7] ref=(13500, '1')  cand=None
+    [8] ref=(14500, '0')  cand=None
+    [9] ref=(15500, '1')  cand=None
+    [10] ref=(17500, '0')  cand=None
+    ...
+
+DIFF acc1[14]: 1029 reference vs 1 candidate samples
+    [1] ref=(500, '1')  cand=None
+    [2] ref=(1500, '0')  cand=None
+    [3] ref=(2500, '1')  cand=None
+    [4] ref=(3500, '0')  cand=None
+    [5] ref=(4500, '1')  cand=None
+    [6] ref=(7500, '0')  cand=None
+    [7] ref=(9500, '1')  cand=None
+    [8] ref=(13500, '0')  cand=None
+    [9] ref=(14500, '1')  cand=None
+    [10] ref=(16500, '0')  cand=None
+    ...
+
+DIFF acc1[15]: 975 reference vs 1 candidate samples
+    [1] ref=(1500, '1')  cand=None
+    [2] ref=(2500, '0')  cand=None
+    [3] ref=(3500, '1')  cand=None
+    [4] ref=(6500, '0')  cand=None
+    [5] ref=(8500, '1')  cand=None
+    [6] ref=(11500, '0')  cand=None
+    [7] ref=(12500, '1')  cand=None
+    [8] ref=(14500, '0')  cand=None
+    [9] ref=(15500, '1')  cand=None
+    [10] ref=(16500, '0')  cand=None
+    ...
+
+DIFF acc1[16]: 963 reference vs 1 candidate samples
+    [1] ref=(1500, '1')  cand=None
+    [2] ref=(2500, '0')  cand=None
+    [3] ref=(3500, '1')  cand=None
+    [4] ref=(5500, '0')  cand=None
+    [5] ref=(8500, '1')  cand=None
+    [6] ref=(9500, '0')  cand=None
+    [7] ref=(11500, '1')  cand=None
+    [8] ref=(12500, '0')  cand=None
+    [9] ref=(14500, '1')  cand=None
+    [10] ref=(19500, '0')  cand=None
+    ...
+
+DIFF acc1[17]: 1034 reference vs 1 candidate samples
+    [1] ref=(2500, '1')  cand=None
+    [2] ref=(3500, '0')  cand=None
+    [3] ref=(4500, '1')  cand=None
+    [4] ref=(7500, '0')  cand=None
+    [5] ref=(8500, '1')  cand=None
+    [6] ref=(9500, '0')  cand=None
+    [7] ref=(10500, '1')  cand=None
+    [8] ref=(12500, '0')  cand=None
+    [9] ref=(13500, '1')  cand=None
+    [10] ref=(14500, '0')  cand=None
+    ...
+
+DIFF acc1[18]: 1009 reference vs 1 candidate samples
+    [1] ref=(500, '1')  cand=None
+    [2] ref=(1500, '0')  cand=None
+    [3] ref=(2500, '1')  cand=None
+    [4] ref=(6500, '0')  cand=None
+    [5] ref=(13500, '1')  cand=None
+    [6] ref=(14500, '0')  cand=None
+    [7] ref=(15500, '1')  cand=None
+    [8] ref=(23500, '0')  cand=None
+    [9] ref=(25500, '1')  cand=None
+    [10] ref=(28500, '0')  cand=None
+    ...
+
+DIFF acc1[19]: 959 reference vs 1 candidate samples
+    [1] ref=(500, '1')  cand=None
+    [2] ref=(1500, '0')  cand=None
+    [3] ref=(2500, '1')  cand=None
+    [4] ref=(4500, '0')  cand=None
+    [5] ref=(5500, '1')  cand=None
+    [6] ref=(7500, '0')  cand=None
+    [7] ref=(8500, '1')  cand=None
+    [8] ref=(9500, '0')  cand=None
+    [9] ref=(11500, '1')  cand=None
+    [10] ref=(12500, '0')  cand=None
+    ...
+
+DIFF acc1[1]: 734 reference vs 1 candidate samples
+    [1] ref=(4500, '1')  cand=None
+    [2] ref=(5500, '0')  cand=None
+    [3] ref=(7500, '1')  cand=None
+    [4] ref=(10500, '0')  cand=None
+    [5] ref=(15500, '1')  cand=None
+    [6] ref=(18500, '0')  cand=None
+    [7] ref=(27500, '1')  cand=None
+    [8] ref=(29500, '0')  cand=None
+    [9] ref=(31500, '1')  cand=None
+    [10] ref=(32500, '0')  cand=None
+    ...
+
+DIFF acc1[20]: 1013 reference vs 1 candidate samples
+    [1] ref=(500, '1')  cand=None
+    [2] ref=(6500, '0')  cand=None
+    [3] ref=(8500, '1')  cand=None
+    [4] ref=(9500, '0')  cand=None
+    [5] ref=(14500, '1')  cand=None
+    [6] ref=(15500, '0')  cand=None
+    [7] ref=(16500, '1')  cand=None
+    [8] ref=(18500, '0')  cand=None
+    [9] ref=(19500, '1')  cand=None
+    [10] ref=(21500, '0')  cand=None
+    ...
+
+DIFF acc1[21]: 1030 reference vs 1 candidate samples
+    [1] ref=(500, '1')  cand=None
+    [2] ref=(3500, '0')  cand=None
+    [3] ref=(4500, '1')  cand=None
+    [4] ref=(5500, '0')  cand=None
+    [5] ref=(6500, '1')  cand=None
+    [6] ref=(8500, '0')  cand=None
+    [7] ref=(9500, '1')  cand=None
+    [8] ref=(11500, '0')  cand=None
+    [9] ref=(12500, '1')  cand=None
+    [10] ref=(15500, '0')  cand=None
+    ...
+
+DIFF acc1[22]: 990 reference vs 1 candidate samples
+    [1] ref=(500, '1')  cand=None
+    [2] ref=(3500, '0')  cand=None
+    [3] ref=(4500, '1')  cand=None
+    [4] ref=(6500, '0')  cand=None
+    [5] ref=(9500, '1')  cand=None
+    [6] ref=(11500, '0')  cand=None
+    [7] ref=(12500, '1')  cand=None
+    [8] ref=(14500, '0')  cand=None
+    [9] ref=(16500, '1')  cand=None
+    [10] ref=(17500, '0')  cand=None
+    ...
+
+DIFF acc1[23]: 1007 reference vs 1 candidate samples
+    [1] ref=(500, '1')  cand=None
+    [2] ref=(1500, '0')  cand=None
+    [3] ref=(2500, '1')  cand=None
+    [4] ref=(3500, '0')  cand=None
+    [5] ref=(4500, '1')  cand=None
+    [6] ref=(6500, '0')  cand=None
+    [7] ref=(7500, '1')  cand=None
+    [8] ref=(8500, '0')  cand=None
+    [9] ref=(11500, '1')  cand=None
+    [10] ref=(12500, '0')  cand=None
+    ...
+
+DIFF acc1[24]: 1014 reference vs 1 candidate samples
+    [1] ref=(500, '1')  cand=None
+    [2] ref=(1500, '0')  cand=None
+    [3] ref=(4500, '1')  cand=None
+    [4] ref=(5500, '0')  cand=None
+    [5] ref=(7500, '1')  cand=None
+    [6] ref=(8500, '0')  cand=None
+    [7] ref=(11500, '1')  cand=None
+    [8] ref=(12500, '0')  cand=None
+    [9] ref=(15500, '1')  cand=None
+    [10] ref=(17500, '0')  cand=None
+    ...
+
+DIFF acc1[25]: 1012 reference vs 1 candidate samples
+    [1] ref=(4500, '1')  cand=None
+    [2] ref=(5500, '0')  cand=None
+    [3] ref=(6500, '1')  cand=None
+    [4] ref=(7500, '0')  cand=None
+    [5] ref=(8500, '1')  cand=None
+    [6] ref=(9500, '0')  cand=None
+    [7] ref=(10500, '1')  cand=None
+    [8] ref=(12500, '0')  cand=None
+    [9] ref=(13500, '1')  cand=None
+    [10] ref=(19500, '0')  cand=None
+    ...
+
+DIFF acc1[26]: 1011 reference vs 1 candidate samples
+    [1] ref=(500, '1')  cand=None
+    [2] ref=(1500, '0')  cand=None
+    [3] ref=(4500, '1')  cand=None
+    [4] ref=(6500, '0')  cand=None
+    [5] ref=(7500, '1')  cand=None
+    [6] ref=(12500, '0')  cand=None
+    [7] ref=(13500, '1')  cand=None
+    [8] ref=(14500, '0')  cand=None
+    [9] ref=(19500, '1')  cand=None
+    [10] ref=(22500, '0')  cand=None
+    ...
+
+DIFF acc1[27]: 967 reference vs 1 candidate samples
+    [1] ref=(7500, '1')  cand=None
+    [2] ref=(10500, '0')  cand=None
+    [3] ref=(11500, '1')  cand=None
+    [4] ref=(12500, '0')  cand=None
+    [5] ref=(14500, '1')  cand=None
+    [6] ref=(16500, '0')  cand=None
+    [7] ref=(20500, '1')  cand=None
+    [8] ref=(21500, '0')  cand=None
+    [9] ref=(22500, '1')  cand=None
+    [10] ref=(25500, '0')  cand=None
+    ...
+
+DIFF acc1[28]: 981 reference vs 1 candidate samples
+    [1] ref=(500, '1')  cand=None
+    [2] ref=(2500, '0')  cand=None
+    [3] ref=(7500, '1')  cand=None
+    [4] ref=(10500, '0')  cand=None
+    [5] ref=(14500, '1')  cand=None
+    [6] ref=(15500, '0')  cand=None
+    [7] ref=(16500, '1')  cand=None
+    [8] ref=(18500, '0')  cand=None
+    [9] ref=(21500, '1')  cand=None
+    [10] ref=(22500, '0')  cand=None
+    ...
+
+DIFF acc1[29]: 990 reference vs 1 candidate samples
+    [1] ref=(1500, '1')  cand=None
+    [2] ref=(2500, '0')  cand=None
+    [3] ref=(4500, '1')  cand=None
+    [4] ref=(5500, '0')  cand=None
+    [5] ref=(6500, '1')  cand=None
+    [6] ref=(7500, '0')  cand=None
+    [7] ref=(10500, '1')  cand=None
+    [8] ref=(14500, '0')  cand=None
+    [9] ref=(15500, '1')  cand=None
+    [10] ref=(16500, '0')  cand=None
+    ...
+
+DIFF acc1[2]: 888 reference vs 1 candidate samples
+    [1] ref=(6500, '1')  cand=None
+    [2] ref=(10500, '0')  cand=None
+    [3] ref=(27500, '1')  cand=None
+    [4] ref=(28500, '0')  cand=None
+    [5] ref=(30500, '1')  cand=None
+    [6] ref=(33500, '0')  cand=None
+    [7] ref=(36500, '1')  cand=None
+    [8] ref=(41500, '0')  cand=None
+    [9] ref=(42500, '1')  cand=None
+    [10] ref=(45500, '0')  cand=None
+    ...
+
+DIFF acc1[30]: 1031 reference vs 1 candidate samples
+    [1] ref=(500, '1')  cand=None
+    [2] ref=(1500, '0')  cand=None
+    [3] ref=(3500, '1')  cand=None
+    [4] ref=(6500, '0')  cand=None
+    [5] ref=(9500, '1')  cand=None
+    [6] ref=(10500, '0')  cand=None
+    [7] ref=(12500, '1')  cand=None
+    [8] ref=(14500, '0')  cand=None
+    [9] ref=(16500, '1')  cand=None
+    [10] ref=(18500, '0')  cand=None
+    ...
+
+DIFF acc1[31]: 992 reference vs 1 candidate samples
+    [1] ref=(500, '1')  cand=None
+    [2] ref=(1500, '0')  cand=None
+    [3] ref=(2500, '1')  cand=None
+    [4] ref=(4500, '0')  cand=None
+    [5] ref=(8500, '1')  cand=None
+    [6] ref=(9500, '0')  cand=None
+    [7] ref=(12500, '1')  cand=None
+    [8] ref=(13500, '0')  cand=None
+    [9] ref=(14500, '1')  cand=None
+    [10] ref=(15500, '0')  cand=None
+    ...
+
+DIFF acc1[32]: 965 reference vs 1 candidate samples
+    [1] ref=(500, '1')  cand=None
+    [2] ref=(2500, '0')  cand=None
+    [3] ref=(3500, '1')  cand=None
+    [4] ref=(4500, '0')  cand=None
+    [5] ref=(6500, '1')  cand=None
+    [6] ref=(8500, '0')  cand=None
+    [7] ref=(11500, '1')  cand=None
+    [8] ref=(12500, '0')  cand=None
+    [9] ref=(15500, '1')  cand=None
+    [10] ref=(16500, '0')  cand=None
+    ...
+
+DIFF acc1[33]: 1025 reference vs 1 candidate samples
+    [1] ref=(1500, '1')  cand=None
+    [2] ref=(2500, '0')  cand=None
+    [3] ref=(4500, '1')  cand=None
+    [4] ref=(7500, '0')  cand=None
+    [5] ref=(11500, '1')  cand=None
+    [6] ref=(12500, '0')  cand=None
+    [7] ref=(15500, '1')  cand=None
+    [8] ref=(16500, '0')  cand=None
+    [9] ref=(17500, '1')  cand=None
+    [10] ref=(19500, '0')  cand=None
+    ...
+
+DIFF acc1[34]: 988 reference vs 1 candidate samples
+    [1] ref=(1500, '1')  cand=None
+    [2] ref=(3500, '0')  cand=None
+    [3] ref=(5500, '1')  cand=None
+    [4] ref=(7500, '0')  cand=None
+    [5] ref=(13500, '1')  cand=None
+    [6] ref=(14500, '0')  cand=None
+    [7] ref=(17500, '1')  cand=None
+    [8] ref=(18500, '0')  cand=None
+    [9] ref=(19500, '1')  cand=None
+    [10] ref=(21500, '0')  cand=None
+    ...
+
+DIFF acc1[35]: 969 reference vs 1 candidate samples
+    [1] ref=(500, '1')  cand=None
+    [2] ref=(4500, '0')  cand=None
+    [3] ref=(10500, '1')  cand=None
+    [4] ref=(11500, '0')  cand=None
+    [5] ref=(16500, '1')  cand=None
+    [6] ref=(17500, '0')  cand=None
+    [7] ref=(20500, '1')  cand=None
+    [8] ref=(23500, '0')  cand=None
+    [9] ref=(24500, '1')  cand=None
+    [10] ref=(29500, '0')  cand=None
+    ...
+
+DIFF acc1[36]: 992 reference vs 1 candidate samples
+    [1] ref=(500, '1')  cand=None
+    [2] ref=(1500, '0')  cand=None
+    [3] ref=(3500, '1')  cand=None
+    [4] ref=(6500, '0')  cand=None
+    [5] ref=(7500, '1')  cand=None
+    [6] ref=(8500, '0')  cand=None
+    [7] ref=(9500, '1')  cand=None
+    [8] ref=(11500, '0')  cand=None
+    [9] ref=(14500, '1')  cand=None
+    [10] ref=(16500, '0')  cand=None
+    ...
+
+DIFF acc1[37]: 991 reference vs 1 candidate samples
+    [1] ref=(500, '1')  cand=None
+    [2] ref=(2500, '0')  cand=None
+    [3] ref=(3500, '1')  cand=None
+    [4] ref=(4500, '0')  cand=None
+    [5] ref=(9500, '1')  cand=None
+    [6] ref=(14500, '0')  cand=None
+    [7] ref=(18500, '1')  cand=None
+    [8] ref=(19500, '0')  cand=None
+    [9] ref=(20500, '1')  cand=None
+    [10] ref=(21500, '0')  cand=None
+    ...
+
+DIFF acc1[38]: 966 reference vs 1 candidate samples
+    [1] ref=(6500, '1')  cand=None
+    [2] ref=(8500, '0')  cand=None
+    [3] ref=(10500, '1')  cand=None
+    [4] ref=(12500, '0')  cand=None
+    [5] ref=(17500, '1')  cand=None
+    [6] ref=(18500, '0')  cand=None
+    [7] ref=(20500, '1')  cand=None
+    [8] ref=(21500, '0')  cand=None
+    [9] ref=(24500, '1')  cand=None
+    [10] ref=(30500, '0')  cand=None
+    ...
+
+DIFF acc1[39]: 959 reference vs 1 candidate samples
+    [1] ref=(500, '1')  cand=None
+    [2] ref=(5500, '0')  cand=None
+    [3] ref=(9500, '1')  cand=None
+    [4] ref=(10500, '0')  cand=None
+    [5] ref=(11500, '1')  cand=None
+    [6] ref=(14500, '0')  cand=None
+    [7] ref=(22500, '1')  cand=None
+    [8] ref=(25500, '0')  cand=None
+    [9] ref=(29500, '1')  cand=None
+    [10] ref=(30500, '0')  cand=None
+    ...
+
+DIFF acc1[3]: 979 reference vs 1 candidate samples
+    [1] ref=(500, '1')  cand=None
+    [2] ref=(1500, '0')  cand=None
+    [3] ref=(6500, '1')  cand=None
+    [4] ref=(7500, '0')  cand=None
+    [5] ref=(8500, '1')  cand=None
+    [6] ref=(10500, '0')  cand=None
+    [7] ref=(12500, '1')  cand=None
+    [8] ref=(14500, '0')  cand=None
+    [9] ref=(18500, '1')  cand=None
+    [10] ref=(20500, '0')  cand=None
+    ...
+
+DIFF acc1[40]: 939 reference vs 1 candidate samples
+    [1] ref=(1500, '1')  cand=None
+    [2] ref=(2500, '0')  cand=None
+    [3] ref=(4500, '1')  cand=None
+    [4] ref=(7500, '0')  cand=None
+    [5] ref=(9500, '1')  cand=None
+    [6] ref=(11500, '0')  cand=None
+    [7] ref=(14500, '1')  cand=None
+    [8] ref=(15500, '0')  cand=None
+    [9] ref=(16500, '1')  cand=None
+    [10] ref=(17500, '0')  cand=None
+    ...
+
+DIFF acc1[41]: 831 reference vs 1 candidate samples
+    [1] ref=(500, '1')  cand=None
+    [2] ref=(1500, '0')  cand=None
+    [3] ref=(3500, '1')  cand=None
+    [4] ref=(5500, '0')  cand=None
+    [5] ref=(6500, '1')  cand=None
+    [6] ref=(7500, '0')  cand=None
+    [7] ref=(11500, '1')  cand=None
+    [8] ref=(12500, '0')  cand=None
+    [9] ref=(15500, '1')  cand=None
+    [10] ref=(16500, '0')  cand=None
+    ...
+
+DIFF acc1[42]: 525 reference vs 1 candidate samples
+    [1] ref=(2500, '1')  cand=None
+    [2] ref=(3500, '0')  cand=None
+    [3] ref=(20500, '1')  cand=None
+    [4] ref=(21500, '0')  cand=None
+    [5] ref=(22500, '1')  cand=None
+    [6] ref=(24500, '0')  cand=None
+    [7] ref=(34500, '1')  cand=None
+    [8] ref=(36500, '0')  cand=None
+    [9] ref=(51500, '1')  cand=None
+    [10] ref=(53500, '0')  cand=None
+    ...
+
+DIFF acc1[4]: 1010 reference vs 1 candidate samples
+    [1] ref=(3500, '1')  cand=None
+    [2] ref=(4500, '0')  cand=None
+    [3] ref=(7500, '1')  cand=None
+    [4] ref=(9500, '0')  cand=None
+    [5] ref=(11500, '1')  cand=None
+    [6] ref=(12500, '0')  cand=None
+    [7] ref=(13500, '1')  cand=None
+    [8] ref=(15500, '0')  cand=None
+    [9] ref=(18500, '1')  cand=None
+    [10] ref=(22500, '0')  cand=None
+    ...
+
+DIFF acc1[5]: 1034 reference vs 1 candidate samples
+    [1] ref=(2500, '1')  cand=None
+    [2] ref=(3500, '0')  cand=None
+    [3] ref=(4500, '1')  cand=None
+    [4] ref=(7500, '0')  cand=None
+    [5] ref=(11500, '1')  cand=None
+    [6] ref=(12500, '0')  cand=None
+    [7] ref=(13500, '1')  cand=None
+    [8] ref=(15500, '0')  cand=None
+    [9] ref=(18500, '1')  cand=None
+    [10] ref=(25500, '0')  cand=None
+    ...
+
+DIFF acc1[6]: 980 reference vs 1 candidate samples
+    [1] ref=(1500, '1')  cand=None
+    [2] ref=(6500, '0')  cand=None
+    [3] ref=(8500, '1')  cand=None
+    [4] ref=(10500, '0')  cand=None
+    [5] ref=(11500, '1')  cand=None
+    [6] ref=(15500, '0')  cand=None
+    [7] ref=(18500, '1')  cand=None
+    [8] ref=(22500, '0')  cand=None
+    [9] ref=(23500, '1')  cand=None
+    [10] ref=(25500, '0')  cand=None
+    ...
+
+DIFF acc1[7]: 1001 reference vs 1 candidate samples
+    [1] ref=(1500, '1')  cand=None
+    [2] ref=(3500, '0')  cand=None
+    [3] ref=(7500, '1')  cand=None
+    [4] ref=(8500, '0')  cand=None
+    [5] ref=(9500, '1')  cand=None
+    [6] ref=(11500, '0')  cand=None
+    [7] ref=(13500, '1')  cand=None
+    [8] ref=(15500, '0')  cand=None
+    [9] ref=(18500, '1')  cand=None
+    [10] ref=(19500, '0')  cand=None
+    ...
+
+DIFF acc1[8]: 976 reference vs 1 candidate samples
+    [1] ref=(2500, '1')  cand=None
+    [2] ref=(3500, '0')  cand=None
+    [3] ref=(5500, '1')  cand=None
+    [4] ref=(6500, '0')  cand=None
+    [5] ref=(7500, '1')  cand=None
+    [6] ref=(10500, '0')  cand=None
+    [7] ref=(11500, '1')  cand=None
+    [8] ref=(12500, '0')  cand=None
+    [9] ref=(13500, '1')  cand=None
+    [10] ref=(14500, '0')  cand=None
+    ...
+
+DIFF acc1[9]: 976 reference vs 1 candidate samples
+    [1] ref=(500, '1')  cand=None
+    [2] ref=(2500, '0')  cand=None
+    [3] ref=(4500, '1')  cand=None
+    [4] ref=(5500, '0')  cand=None
+    [5] ref=(6500, '1')  cand=None
+    [6] ref=(8500, '0')  cand=None
+    [7] ref=(10500, '1')  cand=None
+    [8] ref=(11500, '0')  cand=None
+    [9] ref=(12500, '1')  cand=None
+    [10] ref=(14500, '0')  cand=None
+    ...
+
+DIFF sum[0]: 757 reference vs 757 candidate samples
+    [0] ref=(0, '0')  cand=(0, '1')
+    [1] ref=(2500, '1')  cand=(2500, '0')
+    [2] ref=(3500, '0')  cand=(3500, '1')
+    [3] ref=(5500, '1')  cand=(5500, '0')
+    [4] ref=(9500, '0')  cand=(9500, '1')
+    [5] ref=(13500, '1')  cand=(13500, '0')
+    [6] ref=(16500, '0')  cand=(16500, '1')
+    [7] ref=(20500, '1')  cand=(20500, '0')
+    [8] ref=(22500, '0')  cand=(22500, '1')
+    [9] ref=(25500, '1')  cand=(25500, '0')
+    ...
+
+DIFF sum[10]: 979 reference vs 1016 candidate samples
+    [2] ref=(2500, '0')  cand=(1500, '0')
+    [3] ref=(3500, '1')  cand=(2500, '1')
+    [4] ref=(4500, '0')  cand=(5500, '0')
+    [5] ref=(5500, '1')  cand=(6500, '1')
+    [7] ref=(9500, '1')  cand=(8500, '1')
+    [8] ref=(10500, '0')  cand=(9500, '0')
+    [9] ref=(12500, '1')  cand=(13500, '1')
+    [10] ref=(13500, '0')  cand=(14500, '0')
+    [11] ref=(14500, '1')  cand=(15500, '1')
+    [13] ref=(18500, '1')  cand=(17500, '1')
+    ...
+
+DIFF sum[11]: 994 reference vs 1002 candidate samples
+    [1] ref=(500, '0')  cand=(4500, '0')
+    [2] ref=(1500, '1')  cand=(6500, '1')
+    [3] ref=(2500, '0')  cand=(7500, '0')
+    [4] ref=(3500, '1')  cand=(8500, '1')
+    [5] ref=(4500, '0')  cand=(10500, '0')
+    [6] ref=(5500, '1')  cand=(11500, '1')
+    [7] ref=(8500, '0')  cand=(16500, '0')
+    [8] ref=(9500, '1')  cand=(19500, '1')
+    [9] ref=(11500, '0')  cand=(22500, '0')
+    [10] ref=(12500, '1')  cand=(25500, '1')
+    ...
+
+DIFF sum[12]: 1021 reference vs 1032 candidate samples
+    [0] ref=(0, '1')  cand=(0, '0')
+    [1] ref=(500, '0')  cand=(500, '1')
+    [2] ref=(1500, '1')  cand=(1500, '0')
+    [3] ref=(3500, '0')  cand=(2500, '1')
+    [4] ref=(4500, '1')  cand=(3500, '0')
+    [5] ref=(5500, '0')  cand=(4500, '1')
+    [6] ref=(8500, '1')  cand=(5500, '0')
+    [7] ref=(9500, '0')  cand=(6500, '1')
+    [8] ref=(10500, '1')  cand=(8500, '0')
+    [9] ref=(12500, '0')  cand=(12500, '1')
+    ...
+
+DIFF sum[13]: 994 reference vs 1020 candidate samples
+    [1] ref=(4500, '1')  cand=(500, '1')
+    [2] ref=(6500, '0')  cand=(2500, '0')
+    [3] ref=(8500, '1')  cand=(7500, '1')
+    [4] ref=(10500, '0')  cand=(8500, '0')
+    [6] ref=(13500, '0')  cand=(14500, '0')
+    [7] ref=(14500, '1')  cand=(15500, '1')
+    [8] ref=(16500, '0')  cand=(20500, '0')
+    [9] ref=(17500, '1')  cand=(22500, '1')
+    [10] ref=(18500, '0')  cand=(23500, '0')
+    [11] ref=(20500, '1')  cand=(24500, '1')
+    ...
+
+DIFF sum[14]: 1018 reference vs 983 candidate samples
+    [0] ref=(0, '0')  cand=(0, '1')
+    [1] ref=(4500, '1')  cand=(1500, '0')
+    [2] ref=(5500, '0')  cand=(3500, '1')
+    [3] ref=(8500, '1')  cand=(6500, '0')
+    [4] ref=(9500, '0')  cand=(7500, '1')
+    [5] ref=(10500, '1')  cand=(8500, '0')
+    [6] ref=(12500, '0')  cand=(9500, '1')
+    [7] ref=(15500, '1')  cand=(10500, '0')
+    [8] ref=(16500, '0')  cand=(11500, '1')
+    [9] ref=(18500, '1')  cand=(12500, '0')
+    ...
+
+DIFF sum[15]: 1026 reference vs 980 candidate samples
+    [0] ref=(0, '1')  cand=(0, '0')
+    [1] ref=(4500, '0')  cand=(500, '1')
+    [2] ref=(5500, '1')  cand=(2500, '0')
+    [3] ref=(8500, '0')  cand=(3500, '1')
+    [4] ref=(9500, '1')  cand=(5500, '0')
+    [5] ref=(10500, '0')  cand=(6500, '1')
+    [6] ref=(12500, '1')  cand=(8500, '0')
+    [7] ref=(13500, '0')  cand=(9500, '1')
+    [8] ref=(14500, '1')  cand=(10500, '0')
+    [9] ref=(15500, '0')  cand=(13500, '1')
+    ...
+
+DIFF sum[16]: 1 reference vs 980 candidate samples
+    [1] ref=None  cand=(500, '0')
+    [2] ref=None  cand=(2500, '1')
+    [3] ref=None  cand=(3500, '0')
+    [4] ref=None  cand=(5500, '1')
+    [5] ref=None  cand=(6500, '0')
+    [6] ref=None  cand=(8500, '1')
+    [7] ref=None  cand=(9500, '0')
+    [8] ref=None  cand=(10500, '1')
+    [9] ref=None  cand=(13500, '0')
+    [10] ref=None  cand=(15500, '1')
+    ...
+
+DIFF sum[1]: 935 reference vs 905 candidate samples
+    [0] ref=(0, '0')  cand=(0, '1')
+    [1] ref=(1500, '1')  cand=(1500, '0')
+    [2] ref=(9500, '0')  cand=(3500, '1')
+    [3] ref=(11500, '1')  cand=(11500, '0')
+    [4] ref=(13500, '0')  cand=(12500, '1')
+    [5] ref=(14500, '1')  cand=(13500, '0')
+    [6] ref=(15500, '0')  cand=(14500, '1')
+    [7] ref=(19500, '1')  cand=(16500, '0')
+    [8] ref=(20500, '0')  cand=(20500, '1')
+    [9] ref=(22500, '1')  cand=(27500, '0')
+    ...
+
+DIFF sum[2]: 992 reference vs 1004 candidate samples
+    [1] ref=(2500, '1')  cand=(500, '1')
+    [2] ref=(8500, '0')  cand=(1500, '0')
+    [3] ref=(10500, '1')  cand=(2500, '1')
+    [4] ref=(11500, '0')  cand=(3500, '0')
+    [5] ref=(12500, '1')  cand=(5500, '1')
+    [6] ref=(13500, '0')  cand=(7500, '0')
+    [7] ref=(14500, '1')  cand=(8500, '1')
+    [8] ref=(19500, '0')  cand=(9500, '0')
+    [9] ref=(20500, '1')  cand=(10500, '1')
+    [10] ref=(21500, '0')  cand=(12500, '0')
+    ...
+
+DIFF sum[3]: 1011 reference vs 962 candidate samples
+    [1] ref=(4500, '0')  cand=(1500, '0')
+    [2] ref=(6500, '1')  cand=(2500, '1')
+    [3] ref=(7500, '0')  cand=(4500, '0')
+    [4] ref=(8500, '1')  cand=(10500, '1')
+    [5] ref=(10500, '0')  cand=(13500, '0')
+    [6] ref=(11500, '1')  cand=(14500, '1')
+    [7] ref=(13500, '0')  cand=(16500, '0')
+    [8] ref=(15500, '1')  cand=(17500, '1')
+    [9] ref=(16500, '0')  cand=(19500, '0')
+    [10] ref=(17500, '1')  cand=(20500, '1')
+    ...
+
+DIFF sum[4]: 955 reference vs 1043 candidate samples
+    [1] ref=(500, '0')  cand=(1500, '0')
+    [2] ref=(4500, '1')  cand=(3500, '1')
+    [3] ref=(7500, '0')  cand=(4500, '0')
+    [4] ref=(10500, '1')  cand=(5500, '1')
+    [5] ref=(13500, '0')  cand=(7500, '0')
+    [6] ref=(15500, '1')  cand=(13500, '1')
+    [7] ref=(16500, '0')  cand=(15500, '0')
+    [8] ref=(17500, '1')  cand=(16500, '1')
+    [9] ref=(21500, '0')  cand=(18500, '0')
+    [10] ref=(22500, '1')  cand=(21500, '1')
+    ...
+
+DIFF sum[5]: 1015 reference vs 994 candidate samples
+    [0] ref=(0, '0')  cand=(0, '1')
+    [1] ref=(2500, '1')  cand=(1500, '0')
+    [2] ref=(3500, '0')  cand=(3500, '1')
+    [3] ref=(4500, '1')  cand=(5500, '0')
+    [4] ref=(6500, '0')  cand=(6500, '1')
+    [5] ref=(8500, '1')  cand=(7500, '0')
+    [6] ref=(10500, '0')  cand=(14500, '1')
+    [7] ref=(12500, '1')  cand=(15500, '0')
+    [8] ref=(14500, '0')  cand=(18500, '1')
+    [9] ref=(17500, '1')  cand=(19500, '0')
+    ...
+
+DIFF sum[6]: 1011 reference vs 1006 candidate samples
+    [0] ref=(0, '0')  cand=(0, '1')
+    [1] ref=(2500, '1')  cand=(500, '0')
+    [2] ref=(4500, '0')  cand=(2500, '1')
+    [3] ref=(8500, '1')  cand=(3500, '0')
+    [4] ref=(10500, '0')  cand=(7500, '1')
+    [5] ref=(18500, '1')  cand=(11500, '0')
+    [6] ref=(19500, '0')  cand=(12500, '1')
+    [7] ref=(20500, '1')  cand=(13500, '0')
+    [8] ref=(21500, '0')  cand=(16500, '1')
+    [9] ref=(22500, '1')  cand=(20500, '0')
+    ...
+
+DIFF sum[7]: 994 reference vs 990 candidate samples
+    [2] ref=(2500, '1')  cand=(4500, '1')
+    [3] ref=(3500, '0')  cand=(5500, '0')
+    [4] ref=(6500, '1')  cand=(8500, '1')
+    [5] ref=(10500, '0')  cand=(9500, '0')
+    [6] ref=(11500, '1')  cand=(10500, '1')
+    [7] ref=(13500, '0')  cand=(12500, '0')
+    [8] ref=(14500, '1')  cand=(13500, '1')
+    [9] ref=(15500, '0')  cand=(23500, '0')
+    [10] ref=(17500, '1')  cand=(24500, '1')
+    [11] ref=(19500, '0')  cand=(25500, '0')
+    ...
+
+DIFF sum[8]: 1023 reference vs 990 candidate samples
+    [1] ref=(500, '1')  cand=(3500, '1')
+    [4] ref=(11500, '0')  cand=(12500, '0')
+    [5] ref=(12500, '1')  cand=(13500, '1')
+    [7] ref=(20500, '1')  cand=(17500, '1')
+    [8] ref=(21500, '0')  cand=(18500, '0')
+    [9] ref=(22500, '1')  cand=(19500, '1')
+    [10] ref=(26500, '0')  cand=(22500, '0')
+    [11] ref=(27500, '1')  cand=(24500, '1')
+    [12] ref=(30500, '0')  cand=(25500, '0')
+    [13] ref=(31500, '1')  cand=(27500, '1')
+    ...
+
+DIFF sum[9]: 1034 reference vs 1031 candidate samples
+    [0] ref=(0, '0')  cand=(0, '1')
+    [1] ref=(500, '1')  cand=(1500, '0')
+    [2] ref=(1500, '0')  cand=(2500, '1')
+    [3] ref=(5500, '1')  cand=(3500, '0')
+    [4] ref=(8500, '0')  cand=(4500, '1')
+    [5] ref=(10500, '1')  cand=(6500, '0')
+    [6] ref=(13500, '0')  cand=(7500, '1')
+    [7] ref=(15500, '1')  cand=(9500, '0')
+    [8] ref=(16500, '0')  cand=(11500, '1')
+    [9] ref=(17500, '1')  cand=(15500, '0')
+    ...
+
+123 common port(s), 110544 reference samples.
+FAIL: 108 of 123 port(s) differ.

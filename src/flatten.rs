@@ -358,10 +358,14 @@ impl FlatteningPart {
             let act = macro_activation(mb);
             for &in_iv in mb.in_iv.iter() {
                 if in_iv <= 1 || in_iv == usize::MAX { continue }
+                // An operand that is another macro's combinational output is
+                // not a boolean write-out and must not be charged as one --
+                // it already owns a bit in this part's macro block.
+                if aig.is_comb_macro_output(in_iv >> 1) { continue }
                 comb_outputs_activations.entry(in_iv >> 1)
                     .or_default().insert(act << 1 | (in_iv & 1), None);
             }
-            if mb.clk_en_iv > 1 {
+            if mb.clk_en_iv > 1 && !aig.is_comb_macro_output(mb.clk_en_iv >> 1) {
                 comb_outputs_activations.entry(mb.clk_en_iv >> 1)
                     .or_default().insert(2 | (mb.clk_en_iv & 1), None);
             }
@@ -405,7 +409,14 @@ impl FlatteningPart {
         if pin_iv <= 1 {
             return (0, pin_iv as u8, 1)
         }
-        let pos = self.after_writeout_pin2pos.get(&(pin_iv >> 1)).unwrap();
+        let pos = self.after_writeout_pin2pos.get(&(pin_iv >> 1))
+            .unwrap_or_else(|| panic!(
+                "query_permute_with_pin_iv: clock-enable aigpin {} (iv {}) has \
+                 no boomerang write-out position in this part, which places {} \
+                 macro(s) in {} write-out slot(s). A bare unwrap here used to \
+                 hide which pin was missing.",
+                pin_iv >> 1, pin_iv,
+                self.macro_cellids.len(), self.num_writeouts));
         (*pos, (pin_iv & 1) as u8, 0)
     }
 
@@ -447,7 +458,14 @@ impl FlatteningPart {
         let origpos = match self.after_writeout_pin2pos.get(&(pin_iv >> 1)) {
             Some(origpos) => *origpos,
             None => {
-                panic!("position of pin_iv {} (clken_iv {}) not found.. buggy boomerang, check if netlist and gemparts mismatch.", pin_iv, clken_iv)
+                panic!("position of pin_iv {} (aigpin {}, clken_iv {}) not \
+                        found.. buggy boomerang, check if netlist and gemparts \
+                        mismatch. This part places {} macro(s) in {} write-out \
+                        slot(s); if aigpin {} is a macro output it should have \
+                        been routed through the macro block instead.",
+                       pin_iv, pin_iv >> 1, clken_iv,
+                       self.macro_cellids.len(), self.num_writeouts,
+                       pin_iv >> 1)
             }
         } as usize;
         let r_pos = if activ_idx == 0 {
@@ -501,6 +519,10 @@ impl FlatteningPart {
         // block; bit b of a macro lands at macro_start*32 + b, so a whole
         // macro is contiguous and its base is 32-bit aligned by construction.
         let mut cur_macro_slot = 0u32;
+        // Combinational macro outputs placed so far in this part, aigpin ->
+        // bit position. A later macro in a chain reads its operand from here
+        // instead of from the boolean write-out machinery.
+        let mut macro_out_pos = IndexMap::<usize, u32>::new();
         for ci in 0..self.macro_cellids.len() {
             let cellid = self.macro_cellids[ci];
             let mb = aig.macros[&cellid].clone();
@@ -512,6 +534,24 @@ impl FlatteningPart {
                 if o == 0 || o == usize::MAX { continue }
                 let pos = macro_start * 32 + b as u32;
                 out_bit_pos[b] = pos;
+                if mb.kind.has_comb_outputs() { macro_out_pos.insert(o, pos); }
+                // Enable the commit for this bit. Without it the macro phase
+                // computes correctly, writes into shared_writeouts, and the
+                // result is then masked away at the write-out commit -- the
+                // output freezes at its initial value for the whole run.
+                //
+                // The tables default to clken_set0 = 1, clken_inv = 0, and the
+                // kernel evaluates clken = (perm & ~set0) ^ inv = 0, i.e.
+                // permanently disabled. A boolean write-out escapes that
+                // because get_or_place_output_with_activation places it; a
+                // macro output never goes through that path, so it has to be
+                // placed here. (0, 1, 1) is the "always enabled" encoding,
+                // matching query_permute_with_pin_iv's constant-true result,
+                // and data_inv = 0 because the macro already produced the bit
+                // in its final polarity.
+                let local_pos = ((macro_start - self.state_start) * 32) as usize
+                    + b;
+                self.place_clken_datainv(local_pos, 0, 1, 1, 0);
                 output_map.insert(o << 1, pos);
                 // WHICH map matters, and the two are not interchangeable.
                 //
@@ -537,11 +577,34 @@ impl FlatteningPart {
             // Inputs are combinational results this part must produce, routed
             // through the existing activation machinery so polarity and
             // clock-enable duplication are handled exactly as for a DFF's D.
+            //
+            // EXCEPT when the operand is another macro's combinational output
+            // -- a chained CARRY4's CIN taking the previous CO[3], which is
+            // the dependency the PS names in deliverable B. That pin has no
+            // boomerang write-out position, because no AND-gate cover
+            // produces it; the producing macro already placed it in this
+            // part's macro block. Asking the boolean machinery for a position
+            // panics with "buggy boomerang", which says nothing about macros.
+            //
+            // pe.rs schedules a chain in dependency order and macro_cellids
+            // preserves it, so the producer is always placed before the
+            // consumer reads it here.
             let act = macro_activation(&mb);
             let mut in_bit_pos = Vec::with_capacity(mb.in_iv.len());
             for &in_iv in mb.in_iv.iter() {
                 if in_iv <= 1 || in_iv == usize::MAX {
                     in_bit_pos.push(NO_BIT);
+                    continue
+                }
+                if let Some(&pos) = macro_out_pos.get(&(in_iv >> 1)) {
+                    assert_eq!(in_iv & 1, 0,
+                        "macro cell {} takes an INVERTED macro output (aigpin \
+                         {}) as an operand. The macro phase reads raw state \
+                         bits and has no inversion path, so this cannot be \
+                         lowered correctly. Insert an explicit inverter \
+                         between the two macros in synthesis.",
+                        cellid, in_iv >> 1);
+                    in_bit_pos.push(pos);
                     continue
                 }
                 let pos = self.state_start * 32
@@ -550,9 +613,37 @@ impl FlatteningPart {
                 in_bit_pos.push(pos);
             }
             let clk_en_pos = if mb.clk_en_iv <= 1 { NO_BIT }
+                else if let Some(&pos) = macro_out_pos.get(&(mb.clk_en_iv >> 1)) {
+                    pos
+                }
                 else { self.state_start * 32
                        + self.get_or_place_output_with_activation(
                            mb.clk_en_iv, 1) as u32 };
+            // Every position the kernel dereferences must land inside this
+            // part's write-out block. GEM_RD_BIT computes
+            //     shared_writeouts[(pos >> 5) - io_offset]
+            // with UNSIGNED arithmetic, so a position below the block
+            // underflows to a huge index and one above it runs off the end --
+            // either way an illegal access that surfaces only as a failed
+            // cudaDeviceSynchronize, naming neither the macro nor the pin.
+            // Catch it on the host, where both are still known.
+            {
+                let lo = self.state_start * 32;
+                let hi = (self.state_start + self.num_writeouts) * 32;
+                let mut check = |what: &str, i: usize, p: u32| {
+                    if p == NO_BIT { return }
+                    assert!(p >= lo && p < hi,
+                        "macro cell {} ({:?}) {} {} maps to state bit {}, \
+                         outside this part's write-out block [{}, {}). The \
+                         kernel would index shared_writeouts at {} of {}.",
+                        cellid, mb.kind, what, i, p, lo, hi,
+                        (p >> 5) as i64 - self.state_start as i64,
+                        self.num_writeouts);
+                };
+                for (i, &p) in in_bit_pos.iter().enumerate() { check("input", i, p) }
+                for (i, &p) in out_bit_pos.iter().enumerate() { check("output", i, p) }
+                check("clk_en", 0, clk_en_pos);
+            }
             self.macro_ios.push(MacroIo {
                 cellid, kind: mb.kind, in_bit_pos, out_bit_pos, clk_en_pos,
             });
@@ -902,11 +993,28 @@ impl FlatteningPart {
         }
         script[8] = num_batches;
         script[9] = if num_batches == 0 { 0 } else { macro_section_start };
+        // Keep the partition's script a whole number of 4-word groups.
+        //
+        // The boomerang sections are fetched with 16-byte vector loads --
+        // ((const VectorRead4 *)(script + script_pi)) + threadIdx.x -- so
+        // script_pi must stay 4-word aligned or the cast faults with
+        // "misaligned address", which names neither the script nor the macro.
+        //
+        // Everything stock GEM emits is inherently aligned: 256 words of
+        // metadata, 256*2 per global-read round, 256*4*5 per boomerang stage.
+        // The macro section is the ONLY variable-length piece, and a batch is
+        // 3 + count words, so any batch with an even count breaks the
+        // alignment for every partition that follows. A DSP batch of 2 is what
+        // first exposed it; a CARRY4 batch of 2 would do the same.
+        while script.len() % 4 != 0 { script.push(0); }
+
         // Total words in this partition's script. simulate_block_v1 walks
         // script_pi linearly and asserts it lands exactly on script_size, so
         // it cannot simply fall off the end of a trailing macro section -- it
         // jumps to part_start + this instead.
         script[10] = script.len() as u32;
+        debug_assert_eq!(script.len() % 4, 0,
+                         "partition script must stay 16-byte vector aligned");
 
         script
     }

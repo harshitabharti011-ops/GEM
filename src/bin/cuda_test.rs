@@ -175,6 +175,7 @@ fn simulate_block_v1(
 ) {
     let mut script_pi = 0;
     loop {
+        let part_start = script_pi;
         let num_stages = script[script_pi];
         let is_last_part = script[script_pi + 1];
         let num_ios = script[script_pi + 2];
@@ -416,6 +417,19 @@ fn simulate_block_v1(
                 println!(" [{}] [global {}] = {}", i, io_offset + i, output_state[(io_offset + i) as usize]);
             }
         }
+
+        // Jump past this partition's macro section, exactly as
+        // simulate_block_v1 does with shared_metadata[10]. This CPU reference
+        // walks the script linearly and does not consume the macro records,
+        // so without the jump it finishes short by their total width and the
+        // assert below fires -- 20 words on macro_smoke, which is five
+        // single-macro batches at (3 header + 1 slot) words each.
+        //
+        // NOTE: this makes the walk terminate correctly; it does NOT make the
+        // CPU model evaluate macros. Values driven by a macro are therefore
+        // not validated here. The end-to-end oracle for the native path is the
+        // output VCD compared against the shredded build of the same RTL.
+        script_pi = part_start + script[part_start + 10] as usize;
 
         if is_last_part != 0 {
             break
