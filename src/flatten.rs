@@ -378,8 +378,32 @@ impl FlatteningPart {
                 + 31) / 32) as u32;
         self.comb_outputs_activations = comb_outputs_activations;
 
-        // Writeout block order: normal | duplicate | macro | sram.
-        // SRAMs stay last so their existing offset arithmetic is untouched.
+        // Writeout block order: normal | macro | duplicate | sram.
+        //
+        // The macro block goes BELOW the duplicates, not between them and the
+        // SRAMs, and that ordering is load-bearing rather than cosmetic. The
+        // kernel writes the duplicate words at
+        //
+        //     shared_writeouts[num_ios - num_srams - num_output_duplicates + i]
+        //
+        // deriving the base by subtracting from the TOP of the write-out
+        // region. Stock GEM's layout is normal | duplicate | sram, so that
+        // expression equals `normal` and is right by construction. Inserting
+        // the macro block between the duplicates and the SRAMs silently shifts
+        // it up by num_macro_slots words: every duplicate then lands inside the
+        // macro block, and the slots the host actually assigned keep whatever
+        // the boomerang left in them.
+        //
+        // Nothing detects that. The positions are all in range, so the
+        // host-side bounds check passes; the macro phase later overwrites the
+        // clobbered macro words with correct results, so the macro outputs
+        // still look right. Only operands READ through a duplicate slot are
+        // wrong -- which is to say, only pins a macro needs in the opposite
+        // polarity from the one the boomerang cover produced.
+        //
+        // Putting the macro block below the duplicates restores the invariant
+        // the kernel already assumes and needs no kernel change, which is why
+        // it beats teaching the kernel about num_macro_slots.
         self.num_writeouts = self.num_normal_writeouts + self.num_srams
             + self.num_duplicate_writeouts + self.num_macro_slots;
 
@@ -476,7 +500,12 @@ impl FlatteningPart {
         }
         else {
             self.cnt_placed_duplicate_permute += 1;
-            let dup_pos = ((self.num_writeouts - self.num_srams - self.num_macro_slots) * 32 - self.cnt_placed_duplicate_permute) as usize;
+            // Counts DOWN from the top of the duplicate block, which now ends
+            // where the SRAM block begins -- see the layout note in
+            // init_afters_writeouts. The kernel derives the same base by
+            // subtracting from num_ios, so the two only agree while nothing
+            // sits between the duplicates and the SRAMs.
+            let dup_pos = ((self.num_writeouts - self.num_srams) * 32 - self.cnt_placed_duplicate_permute) as usize;
             let dup_perm_pos = ((self.num_srams * 4 + self.num_duplicate_writeouts) * 32 - self.cnt_placed_duplicate_permute) as usize;
             if dup_perm_pos >= 8192 {
                 panic!("sram duplicate bit larger than expected..")
@@ -493,6 +522,39 @@ impl FlatteningPart {
         *self.comb_outputs_activations.get_mut(&(pin_iv >> 1)).unwrap()
             .get_mut(&(clken_iv << 1 | (pin_iv & 1))).unwrap() = Some(r_pos);
         r_pos
+    }
+
+    /// A chained macro operand is only readable if its producer ran in an
+    /// EARLIER batch. Same batch is a data race, not a late value: the kernel
+    /// runs a batch as one thread per macro and only fences between batches.
+    ///
+    /// Cheap to state, impossible to see in a waveform. The symptom is a
+    /// plausible-looking result whose low bits are right (the head of a chain
+    /// has a constant carry-in and never races) and whose error rate decays
+    /// upward with carry propagation -- which reads as an arithmetic bug and
+    /// sends you into the macro model, where nothing is wrong.
+    fn check_chain_order(
+        &self,
+        aig: &AIG,
+        batch_of: &IndexMap<usize, usize>,
+        consumer: usize,
+        operand_pin: usize,
+    ) {
+        let prod = match aig.comb_macro_driver(operand_pin) {
+            Some(p) => p, None => return
+        };
+        // An endpoint-only macro has no batch; it produces nothing another
+        // macro can read, so there is nothing to order.
+        let (pb, cb) = match (batch_of.get(&prod), batch_of.get(&consumer)) {
+            (Some(&a), Some(&b)) => (a, b), _ => return
+        };
+        assert!(pb < cb,
+            "macro cell {} reads aigpin {} from macro cell {}, but both run in \
+             batch {}. Batches execute as one thread per macro with a fence \
+             only BETWEEN them, so the consumer would read the producer's \
+             write-out slot while the producer is still writing it. pe.rs must \
+             hold the consumer back a batch.",
+            consumer, operand_pin, prod, pb);
     }
 
     fn make_inputs_outputs(
@@ -523,12 +585,44 @@ impl FlatteningPart {
         // bit position. A later macro in a chain reads its operand from here
         // instead of from the boolean write-out machinery.
         let mut macro_out_pos = IndexMap::<usize, u32>::new();
+        // Global batch index of every macro this partition schedules.
+        //
+        // Chaining is only correct ACROSS batches. The kernel runs one thread
+        // per macro within a batch and separates batches with __syncthreads(),
+        // so a consumer sharing a batch with its producer races the producer's
+        // scatter and reads whatever was in the slot beforehand. Placement
+        // order in macro_cellids cannot see that -- a consumer later in the
+        // same batch still finds its producer in macro_out_pos and looks
+        // perfectly well-formed. Hence an explicit index.
+        let mut batch_of = IndexMap::<usize, usize>::new();
+        {
+            let mut bi = 0usize;
+            for stage in &part.stages {
+                for batch in &stage.macro_ops {
+                    for &c in &batch.cellids { batch_of.insert(c, bi); }
+                    bi += 1;
+                }
+            }
+        }
+        if std::env::var("GEM_DUMP_MACROS").is_ok() {
+            eprintln!("PART stages={} batches_per_stage={:?} macro_cellids={} \
+                       scheduled={} normal={} dup={} macro={} sram={}",
+                part.stages.len(),
+                part.stages.iter().map(|s| s.macro_ops.len()).collect::<Vec<_>>(),
+                self.macro_cellids.len(), batch_of.len(),
+                self.num_normal_writeouts, self.num_duplicate_writeouts,
+                self.num_macro_slots, self.num_srams);
+        }
         for ci in 0..self.macro_cellids.len() {
             let cellid = self.macro_cellids[ci];
             let mb = aig.macros[&cellid].clone();
             let n_slots = ((mb.kind.num_outputs() + 31) / 32) as u32;
+            // normal | macro | duplicate | sram -- the macro block starts right
+            // after the normal write-outs. Do NOT move it above the duplicates:
+            // the kernel finds the duplicate base by subtracting from the top.
             let macro_start = self.state_start + self.num_writeouts
-                - self.num_srams - self.num_macro_slots + cur_macro_slot;
+                - self.num_srams - self.num_duplicate_writeouts
+                - self.num_macro_slots + cur_macro_slot;
             let mut out_bit_pos = vec![NO_BIT; mb.kind.num_outputs()];
             for (b, &o) in mb.outputs.iter().enumerate() {
                 if o == 0 || o == usize::MAX { continue }
@@ -606,8 +700,26 @@ impl FlatteningPart {
                          lowered correctly. Insert an explicit inverter \
                          between the two macros in synthesis.",
                         cellid, in_iv >> 1);
+                    self.check_chain_order(aig, &batch_of, cellid, in_iv >> 1);
                     in_bit_pos.push(pos);
                     continue
+                }
+                // A combinational macro output that is NOT in macro_out_pos is
+                // not something the boolean machinery can produce: no AND-gate
+                // cover drives it. Falling through would place a write-out slot
+                // that nothing ever writes, and the macro would read whatever
+                // the boolean phase happened to leave there -- a wrong answer
+                // with no symptom at the host. It means the producer landed in
+                // a different partition, or after this consumer in placement
+                // order. Name it here.
+                if let Some(prod) = aig.comb_macro_driver(in_iv >> 1) {
+                    panic!("macro cell {} takes aigpin {}, a combinational \
+                            output of macro cell {}, but that macro is not \
+                            placed in this partition ahead of it. Chained \
+                            macros must share a partition and the producer \
+                            must be scheduled in an earlier batch; the \
+                            partitioner split the chain instead.",
+                           cellid, in_iv >> 1, prod);
                 }
                 let pos = self.state_start * 32
                     + self.get_or_place_output_with_activation(in_iv, act) as u32;
@@ -616,9 +728,19 @@ impl FlatteningPart {
             }
             let clk_en_pos = if mb.clk_en_iv <= 1 { NO_BIT }
                 else if let Some(&pos) = macro_out_pos.get(&(mb.clk_en_iv >> 1)) {
+                    self.check_chain_order(
+                        aig, &batch_of, cellid, mb.clk_en_iv >> 1);
                     pos
                 }
-                else { self.state_start * 32
+                else {
+                    if let Some(prod) = aig.comb_macro_driver(mb.clk_en_iv >> 1) {
+                        panic!("macro cell {} takes its clock enable from \
+                                aigpin {}, a combinational output of macro \
+                                cell {} that is not placed in this partition \
+                                ahead of it.",
+                               cellid, mb.clk_en_iv >> 1, prod);
+                    }
+                    self.state_start * 32
                        + self.get_or_place_output_with_activation(
                            mb.clk_en_iv, 1) as u32 };
             // Every position the kernel dereferences must land inside this
@@ -646,6 +768,15 @@ impl FlatteningPart {
                 for (i, &p) in in_bit_pos.iter().enumerate() { check("input", i, p) }
                 for (i, &p) in out_bit_pos.iter().enumerate() { check("output", i, p) }
                 check("clk_en", 0, clk_en_pos);
+            }
+            if std::env::var("GEM_DUMP_MACROS").is_ok() {
+                eprintln!("MACRO cell={} kind={:?} batch={:?} block=[{},{}) \
+                           slot_base={} in={:?} out={:?} clken={}",
+                    cellid, mb.kind, batch_of.get(&cellid),
+                    self.state_start * 32,
+                    (self.state_start + self.num_writeouts) * 32,
+                    macro_start * 32,
+                    in_bit_pos, out_bit_pos, clk_en_pos);
             }
             self.macro_ios.push(MacroIo {
                 cellid, kind: mb.kind, in_bit_pos, out_bit_pos, clk_en_pos,

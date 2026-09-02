@@ -16,6 +16,24 @@ use std::io::{BufReader, BufWriter, Seek, SeekFrom};
 use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 use std::collections::{HashMap, HashSet};
+use std::sync::OnceLock;
+
+/// Per-cycle macro tracing, off unless GEM_DBG_C4 / GEM_DBG_DSP is set.
+///
+/// The env lookup is cached because these sit in the innermost loop -- one
+/// call per macro per simulated cycle -- and `std::env::var` allocates and
+/// takes a lock every time. Left in deliberately: this is what localised the
+/// write-out layout bug, by showing that a CARRY4's operands were right in the
+/// blocks whose lanes share a write-out slot and wrong in the blocks that need
+/// an inverted duplicate.
+fn dbg_c4() -> bool {
+    static V: OnceLock<bool> = OnceLock::new();
+    *V.get_or_init(|| std::env::var("GEM_DBG_C4").is_ok())
+}
+fn dbg_dsp() -> bool {
+    static V: OnceLock<bool> = OnceLock::new();
+    *V.get_or_init(|| std::env::var("GEM_DBG_DSP").is_ok())
+}
 use vcd_ng::{Parser, ScopeItem, Var, Scope, FastFlow, FastFlowToken, FFValueChange, Writer, SimulationCommand};
 
 #[derive(clap::Parser, Debug)]
@@ -363,6 +381,12 @@ fn simulate_block_v1(
                             let pre = rd(in_pos[k]); k += 1;
                             let mode = rd(in_pos[k]) | (rd(in_pos[k + 1]) << 1);
                             let p_cur = macro_word_state[word_idx] as i64;
+                            if dbg_dsp() {
+                                eprintln!("DSP base={} a={} b={} c={} d={} \
+                                           pre={} mode={} clken={}",
+                                    out_pos[0], a, b, c, dd, pre, mode,
+                                    clk_en as u32);
+                            }
                             let p_nxt = host_dsp48e2(a, b, c, dd, pre != 0, mode, p_cur);
                             // PREG is clocked: hold when the enable is low.
                             let p_com = if clk_en { p_nxt } else { p_cur };
@@ -376,6 +400,12 @@ fn simulate_block_v1(
                             let cin = rd(in_pos[8]) != 0;
                             let cyi = rd(in_pos[9]) != 0;
                             let (co, o) = host_carry4(s, di, cin, cyi);
+                            if dbg_c4() {
+                                eprintln!("C4 base={} s={:04b} di={:04b} cin={} \
+                                           cyi={} co={:04b} o={:04b} cinpos={}",
+                                    out_pos[0], s, di, cin as u32, cyi as u32,
+                                    co, o, in_pos[8]);
+                            }
                             // output slots are CO[3:0] then O[3:0]
                             o_word = (co as u64) | ((o as u64) << 4);
                         },

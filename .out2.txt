@@ -1,0 +1,35 @@
+==> remap build_shred
+15:40:09 [0m[34m[INFO] [0mafter merging: 1 parts.
+==> remap build_native
+15:40:09 [0m[34m[INFO] [0mafter merging: 1 parts.
+15:40:09 [0m[34m[INFO] [0mafter merging: 1 parts.
+==> GPU: shredded
+15:40:11 [0m[36m[DEBUG] [0mTimerFinished: [src/bin/cuda_test.rs:713] simulation, Elapsed=51.406991ms
+==> GPU: macro-preserving
+15:40:12 [0m[36m[DEBUG] [0mTimerFinished: [src/bin/cuda_test.rs:713] simulation, Elapsed=134.161079ms
+==> CPU reference: shredded netlist
+}
+15:40:12 [0m[34m[INFO] [0mclock ports detected: clk
+==> CPU reference: macro-preserving netlist
+}
+15:40:13 [0m[34m[INFO] [0mclock ports detected: clk
+
+==> 1. shredded GPU vs CPU ground truth
+
+123 common port(s), 400 cycles, 49200 comparisons.
+PASS: every common port matches the reference at every timestamp.
+
+==> 2. design equivalence: shredded vs macro-preserving, both on CPU
+
+123 common port(s), 400 cycles, 49200 comparisons.
+PASS: every common port matches the reference at every timestamp.
+
+==> 3. macro GPU vs CPU ground truth
+
+123 common port(s), 400 cycles, 49200 comparisons.
+PASS: every common port matches the reference at every timestamp.
+
+==> 4. compiled script on CPU vs CPU ground truth
+
+123 common port(s), 400 cycles, 49200 comparisons.
+PASS: every common port matches the reference at every timestamp.

@@ -774,6 +774,19 @@ impl AIG {
         }
     }
 
+    /// The cell id of the macro driving `aigpin`, when that macro produces it
+    /// combinationally. `is_comb_macro_output` answers whether; this answers
+    /// which, which is what a scheduling check needs.
+    pub fn comb_macro_driver(&self, aigpin: usize) -> Option<usize> {
+        match self.drivers.get(aigpin) {
+            Some(&DriverType::Macro(cellid, _)) => match self.macros.get(&cellid) {
+                Some(mb) if mb.kind.has_comb_outputs() => Some(cellid),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
     pub fn num_endpoint_groups(&self) -> usize {
         self.primary_outputs.len() + self.dffs.len() + self.srams.len()
             + self.seq_macro_ids.len()

@@ -78,6 +78,7 @@ fact.
 
 %======================================================================
 \section{Modified DAG Levelization Equations}
+\label{sec:levelization}
 \label{sec:sched}
 %======================================================================
 
@@ -205,6 +206,30 @@ Major stage & Contents & Boomerang depth\\
 The four chained CARRY4s all satisfy $\eval = 0$ by (P3), confirming that the
 16-bit carry chain costs no additional grid synchronisation.
 
+On the scaled benchmark \texttt{bench/macro\_bench.sv} at $\text{LANES}=16$
+(16 DSP48E2, 64 CARRY4 in 16 four-block chains, 16 SRLC32E, 96 macros in all)
+the equations again yield $D = 1$, and the 64 chained CARRY4s occupy
+\emph{four batches within one major stage} rather than four stages:
+
+\begin{center}
+\begin{tabular}{llrr}
+\toprule
+Major stage & Contents & Partitions & Macro batches\\
+\midrule
+0 & 16 DSP48E2 (endpoint), 64 CARRY4, 16 SRLC32E & 2 & 5\\
+1 & boolean cones consuming macro results & 1 & 0\\
+\bottomrule
+\end{tabular}
+\end{center}
+
+This is (P3) doing the work it exists for. Ordering within a chain is enforced
+by \texttt{\_\_syncthreads()} between batches, which is free; only the
+macro$\to$boolean edge costs a \texttt{this\_grid().sync()}. Had chaining been
+charged a major stage per link, this design would have needed five instead of
+two, and \S\ref{sec:results} shows that each additional major stage costs
+$\approx 31\,\mu$s per simulated cycle --- so (P3) is worth roughly
+$93\,\mu$s/cycle on a design this shape.
+
 %======================================================================
 \section{VRAM Layout Architecture}
 \label{sec:vram}
@@ -230,14 +255,19 @@ Within a partition the write-out region is ordered
 \[
 \underbrace{\text{normal}}_{n_w}
 \;\Vert\;
-\underbrace{\text{duplicate}}_{n_d}
-\;\Vert\;
 \underbrace{\text{macro}}_{n_m}
+\;\Vert\;
+\underbrace{\text{duplicate}}_{n_d}
 \;\Vert\;
 \underbrace{\text{SRAM}}_{n_s}
 \]
 
-with SRAM deliberately last so its pre-existing offset arithmetic is untouched.
+with SRAM deliberately last so its pre-existing offset arithmetic is untouched
+and --- less obviously --- with the macro block \emph{below} the duplicates
+rather than between them and the SRAMs. That ordering is a correctness
+requirement rather than a layout preference; \S\ref{sec:dup-defect} gives the
+defect that established it.
+
 Macro instance $i$ receives
 
 \[
@@ -310,6 +340,7 @@ in. Measured effect on \texttt{macro\_smoke}: the macro-preserving script is
 
 %======================================================================
 \section{Occupancy and Resource Profile}
+\label{sec:occupancy}
 \label{sec:occ}
 %======================================================================
 
@@ -321,22 +352,48 @@ binary, and with a device query for the machine parameters.
 \toprule
 \multicolumn{2}{c}{\textbf{Kernel} \texttt{simulate\_v1\_noninteractive\_simple\_scan}}\\
 \midrule
-Registers / thread & \textbf{86} \; (ceiling 128)\\
-Stack frame & 0 bytes\\
-Local memory & \textbf{0 bytes} --- no spilling\\
+Registers / thread & \textbf{86} and \textbf{105} \; (ceiling 128)\\
+Stack frame & \textbf{0 bytes} (both variants)\\
+Local memory & \textbf{0 bytes} --- no spilling (both variants)\\
 Shared memory & 3{,}328 bytes\\
-Constant bank 0 & 440 bytes\\
+Constant bank 0 & 440 / 408 bytes\\
 \midrule
 \multicolumn{2}{c}{\textbf{Device} --- NVIDIA RTX 3050 6\,GB Laptop, \texttt{sm\_86}}\\
 \midrule
 Streaming multiprocessors & 20\\
 Registers per SM & 65{,}536\\
+Register allocation granularity & 256 per warp\\
 Blocks per SM at 86 reg/thread & 2\\
+Blocks per SM at 105 reg/thread & 2\\
 Cooperative grid ceiling & $2 \times 20 = \mathbf{40}$ blocks\\
 \texttt{num\_blocks} used & 40\\
 \bottomrule
 \end{tabular}
 \end{center}
+
+The fatbin carries two compiled variants of the kernel, at 86 and 105 registers
+per thread. Which one the driver loads is not determined here, and it does not
+need to be: both round to the same occupancy. At 256 threads per block, a warp
+allocates $\lceil 86 \cdot 32 / 256 \rceil \cdot 256 = 2816$ registers, a block
+$8 \times 2816 = 22{,}528$, and $\lfloor 65536 / 22528 \rfloor = 2$ blocks per
+SM. The 105-register variant gives 2 as well. Every conclusion below is
+therefore insensitive to the choice.
+
+\paragraph{The 3-blocks/SM threshold, and how narrowly it is missed.}
+Three resident blocks would need $\lfloor 65536/3 \rfloor = 21{,}845$ registers
+per block, i.e.\ $2730$ per warp, which the 256-register granularity rounds down
+to $2560$ --- exactly $\mathbf{80}$ registers per thread. At 86 the kernel
+misses the threshold by six registers per thread, or $512$ registers per SM out
+of $65{,}536$: under one percent. Capping at
+\texttt{-maxrregcount=80} would raise the cooperative grid ceiling from 40 to
+$3 \times 20 = 60$ blocks, a fifty percent increase in resident parallelism.
+
+That lever is recorded rather than exercised, and \S\ref{sec:throughput}
+explains why it would change nothing on the present benchmark: at
+$\text{LANES}=16$ the macro-preserving flow produces three partitions, so it
+occupies at most two blocks. Raising a ceiling of 40 to 60 cannot help a
+workload that is using two. The measurement identifies the lever; a design with
+enough partitions to press against the ceiling is what would make it pay.
 
 \subsection{Why the ceiling is a design boundary}
 
@@ -356,10 +413,20 @@ proves nothing about occupancy health. The metric that does is
 \texttt{l1tex\_\_t\_sectors\_pipe\_lsu\_mem\_local\_op\_ld.sum}
 \end{center}
 
-under Nsight Compute, which must remain at zero. At the time of writing the
-kernel reports \texttt{LOCAL:0}, so 125 registers is inside budget --- but with
-three registers of margin, any further macro work (richer DSP modes, chain
-fusion) should be assumed to cross it and must be re-measured, not estimated.
+under Nsight Compute --- or, without profiling privileges,
+\texttt{cuobjdump -res-usage}, which reports the same fact statically as
+\texttt{LOCAL} and \texttt{STACK}. Both variants of the shipped kernel report
+\texttt{STACK:0 LOCAL:0}, so the macro phase is inside budget with 22 registers
+of headroom against the 128 cap. That margin is the reason the correctness
+fixes could be made without measuring occupancy after each one --- but it is
+not licence: richer DSP modes or chain fusion should be assumed to cross it and
+must be re-measured, not estimated.
+
+It is worth recording that this figure improved as a side effect of a
+correctness fix rather than a tuning pass. Moving the \texttt{data\_inv}
+correction ahead of the macro phase (\S\ref{sec:latent}) replaced two XOR
+operations with one and removed a value that had been live across the entire
+phase: registers fell from 125 to 86, still with no spilling.
 
 \paragraph{Design consequence.}
 This boundary is why the correctness fixes described in
@@ -589,49 +656,143 @@ restatement of the specification.
 
 \subsection{Front-end: the cost of shredding}
 
-Identical RTL, two synthesis flows:
+Identical RTL, two synthesis flows, on both benchmarks:
 
 \begin{center}
-\begin{tabular}{lrrr}
+\begin{tabular}{llrrrr}
 \toprule
-Flow & AIG cells & DFFs & Macro instances\\
+Design & Flow & AIG cells & DFFs & Macros & Partitions\\
 \midrule
-Shredded baseline & 9{,}922 & 133 & 0\\
-Macros preserved & \textbf{95} & 8 & 2 DSP + 4 CARRY4 + 1 SRL\\
+\texttt{macro\_smoke} & shredded & 9{,}922 & 133 & 0 & 1\\
+                      & preserved & \textbf{95} & 8 & 7 & 1\\
+\midrule
+\texttt{macro\_bench} & shredded & 85{,}444 & 1{,}600 & 0 & 6\\
+$\text{LANES}=16$     & preserved & \textbf{5{,}754} & 768 & 96 & $2 + 1$\\
 \bottomrule
 \end{tabular}
 \end{center}
 
-A $\mathbf{104\times}$ reduction in AIG cell count. This single pair of numbers
-quantifies the architectural claim: shredding a handful of word-level
-primitives inflates the graph by two orders of magnitude.
+$104\times$ and $14.8\times$ reductions in AIG cell count. That shredding a
+handful of word-level primitives inflates the graph by one to two orders of
+magnitude is the architectural claim, and these are the numbers behind it.
+
+The DFF counts move too, and for a reason worth naming: a DSP48E2's $P$
+register and an SRLC32E's shift register become \emph{macro word state} rather
+than boolean flip-flops, so they leave the boomerang's endpoint set entirely.
 
 \subsection{Throughput}
+\label{sec:throughput}
 
-Measured on the same GPU, same \texttt{num\_blocks} $=40$, same 2001-cycle
-input VCD, same binary.
+\texttt{macro\_bench} at $\text{LANES}=16$. Same GPU, same stimulus, same
+\texttt{num\_blocks} $=40$, same 400 cycles, same binary; five repetitions per
+side, median reported. Timing is GEM's own \texttt{simulation} span, which
+brackets the kernel launches and excludes parsing, mapping and VCD writing.
 
 \begin{center}
-\begin{tabular}{lrrr}
+\begin{tabular}{lrrrr}
 \toprule
-Configuration & Cycles & Kernel time & Simulated cycles/s\\
+Configuration & Median & Cycles/s & Script/cycle & Per cycle\\
 \midrule
-Shredded baseline & 2001 & 52.463\,ms & \textbf{38{,}141}\\
-Native macros & 2001 & \PENDING & \PENDING\\
+Shredded baseline & 18.65\,ms & \textbf{21{,}445} & 2{,}060.0\,KiB & 46.6\,$\mu$s\\
+Native macros     & 31.09\,ms & \textbf{12{,}866} &   454.5\,KiB & 77.7\,$\mu$s\\
+\midrule
+Ratio             & & $\mathbf{0.60\times}$ & $\mathbf{4.53\times}$ smaller & $+31.1\,\mu$s\\
 \bottomrule
 \end{tabular}
 \end{center}
 
-\paragraph{Interpretation, stated honestly.}
-\texttt{macro\_smoke} is a 102-cell design executed on 40 blocks. Both figures
-are dominated by kernel launch and grid-synchronisation overhead, and the
-native configuration pays one additional \texttt{this\_grid().sync()} per cycle
-for its second major stage --- a fixed cost with no work to amortise it against
-at this scale. \textbf{These numbers measure overhead, not simulation
-throughput, and must not be presented as a speedup result.} A throughput claim
-requires a benchmark whose shredded form runs to hundreds of thousands of AIG
-cells, where the $104\times$ graph reduction displaces real boomerang depth.
-The 26\,\% script-size reduction is the meaningful measurement at this scale.
+\paragraph{The optimisation succeeds on its own metric and loses on wall clock.}
+GEM re-reads its entire instruction script from global memory on every
+simulated cycle, so script size is the per-cycle DRAM traffic floor and is
+exactly the quantity this work attacks. It fell $4.53\times$, from 527{,}360 to
+116{,}340 \texttt{u32} words. Runtime nevertheless rose by $31.1\,\mu$s per
+cycle. Both statements are measurements; neither is qualified.
+
+\paragraph{Therefore the workload is not bandwidth-bound.}
+This is the load-bearing inference, and it is falsifiable rather than
+rhetorical. The native configuration reads $1.64$\,MB \emph{less} every cycle.
+Were the run limited by script bandwidth, its script-read component would have
+fallen to $22\,\%$ of the baseline's and total runtime would have fallen with
+it. It rose. Expressing the same data as achieved script-read rates makes the
+gap plain:
+
+\begin{center}
+\begin{tabular}{lrrr}
+\toprule
+Configuration & Script traffic & Elapsed & Achieved rate\\
+\midrule
+Shredded baseline & 843.8\,MB & 18.65\,ms & 45.2\,GB/s\\
+Native macros     & 186.1\,MB & 31.09\,ms & \textbf{6.0\,GB/s}\\
+\bottomrule
+\end{tabular}
+\end{center}
+
+At $6.0$\,GB/s the native path is nowhere near the memory system's limit. It is
+waiting on something else.
+
+\paragraph{Two candidate causes, and they are separable.}
+\emph{(i) The additional major stage.} Macro-depth staging places boolean
+consumers of a macro result one major stage above their producer, so the native
+path executes two \texttt{this\_grid().sync()} per cycle against the baseline's
+one. A grid barrier of $\approx 31\,\mu$s is the right order for this part.
+
+\emph{(ii) Partition-count collapse.} GEM's unit of parallelism is the
+\emph{partition}, and the front-end table above shows the native flow needs
+three where the baseline needs six --- and splits them across two sequential
+stages, so at most two blocks are resident at any instant. With
+$\texttt{num\_blocks}=40$ both configurations badly under-fill the device, but
+the native one under-fills it by a further factor of three.
+
+Cause (ii) is the more interesting of the two, because it is not an
+implementation defect but a structural tension in the approach:
+\textbf{fewer cells means fewer partitions means less parallelism.} The script
+saving is real, and it only pays once the design is large enough that both
+flows still produce many partitions. This reframes what a larger benchmark
+tests --- not whether the script shrinks, which is settled, but whether
+partition count survives the shrinking.
+
+Section~\ref{sec:profile} reports the Nsight Compute measurement that
+discriminates between (i) and (ii).
+
+\paragraph{What this result is not.}
+It is not evidence that native macro evaluation is a bad idea, and it is not a
+speedup. It is a measurement of where the crossover is not yet. The honest
+summary is that at $\text{LANES}=16$ on an RTX 3050 Laptop, the design is too
+small for a $4.53\times$ bandwidth saving to outweigh one extra grid barrier
+and a threefold loss of occupancy.
+
+\subsection{Kernel profile}
+\label{sec:profile}
+
+\begin{center}
+\begin{tabular}{lrr}
+\toprule
+Metric & Shredded & Native\\
+\midrule
+\texttt{dram\_\_throughput} (\% of peak) & \PENDING & \PENDING\\
+\texttt{sm\_\_warps\_active} (\% of peak) & \PENDING & \PENDING\\
+\texttt{smsp\_\_thread\_inst\_executed} (of 32) & \PENDING & \PENDING\\
+Local memory / stack (static) & \textbf{0 / 0} & \textbf{0 / 0}\\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The last row is measured and the other three are not, because Nsight Compute
+requires elevated access to the GPU performance counters
+(\texttt{ERR\_NVGPUCTRPERM}) which was unavailable on the measurement machine.
+The spill check does not depend on it: \texttt{cuobjdump -res-usage} reports
+\texttt{STACK} and \texttt{LOCAL} statically from the compiled binary, and both
+read zero (\S\ref{sec:occupancy}). That is the row on which the others depend,
+so the analysis in \S\ref{sec:throughput} stands.
+
+Three readings are decisive. A baseline \texttt{dram\_\_throughput} in single
+digits confirms directly that the workload was never bandwidth-bound at this
+scale, which is currently inferred from timing alone. A native
+\texttt{sm\_\_warps\_active} materially below the baseline's implicates
+cause~(ii) over cause~(i). And the local-memory counters must read \emph{zero}:
+\texttt{-maxrregcount} \emph{caps} registers rather than failing to launch, so
+excess pressure spills silently --- a successful launch proves nothing, and
+every conclusion in \S\ref{sec:throughput} is unsafe if these are non-zero.
 
 \subsection{Verification status}
 
@@ -639,22 +800,42 @@ All results below are measured on an RTX 3050 Laptop (\texttt{sm\_86}) with
 identical stimulus and identical \texttt{num\_blocks} on both sides.
 
 \begin{center}
-\begin{tabular}{llll}
+\begin{tabular}{lllr}
 \toprule
-Rung & What it isolates & Result & Scale\\
+Rung & What it isolates & Result & Comparisons\\
 \midrule
 Macro models & PS equations, C++ vs Python & \textbf{Pass} & 14{,}552 vectors\\
-Shredded GPU vs \texttt{naive\_sim} & the ordinary boolean path & \textbf{Pass} & 123/123 ports\\
-Design equivalence (CPU only) & macro-preserving synthesis & \textbf{Pass} & 123/123 ports\\
-Compiled script vs \texttt{naive\_sim} & \texttt{pe.rs} / \texttt{flatten.rs} & \textbf{Pass} & 123/123 ports\\
-Macro GPU vs \texttt{naive\_sim} & the CUDA kernel & \textbf{Pass} & 123/123 ports\\
+\midrule
+\multicolumn{4}{l}{\emph{\texttt{macro\_bench}, $\text{LANES}=16$ --- 82 ports $\times$ 400 cycles}}\\
+1. Shredded GPU vs \texttt{naive\_sim} & the ordinary boolean path & \textbf{Pass} & 32{,}800\\
+2. Design equivalence (CPU only) & macro-preserving synthesis & \textbf{Pass} & 32{,}800\\
+3. Macro GPU vs \texttt{naive\_sim} & the CUDA kernel & \textbf{Pass} & 32{,}800\\
+4. Compiled script vs \texttt{naive\_sim} & \texttt{pe.rs} / \texttt{flatten.rs} & \textbf{Pass} & 32{,}800\\
+\midrule
+\multicolumn{4}{l}{\emph{\texttt{macro\_smoke} regression --- 123 ports $\times$ 400 cycles}}\\
+2. Design equivalence (CPU only) & macro-preserving synthesis & \textbf{Pass} & 49{,}200\\
+4. Compiled script vs \texttt{naive\_sim} & \texttt{pe.rs} / \texttt{flatten.rs} & \textbf{Pass} & 49{,}200\\
 \bottomrule
 \end{tabular}
 \end{center}
 
-Each rung is 400 cycles $\times$ 123 ports $=$ 49{,}200 value comparisons. The
-macro-preserving path evaluates DSP48E2, CARRY4 and SRLC32E natively on the GPU
-ALU and reproduces netlist-level ground truth exactly.
+On \texttt{macro\_bench} the macro-preserving path evaluates 16 DSP48E2,
+64 CARRY4 --- including 16 four-deep \texttt{CO[3]}$\to$\texttt{CIN} chains ---
+and 16 SRLC32E natively on the GPU ALU, and reproduces netlist-level ground
+truth at every port and every timestamp.
+
+One dependency in that design exists purely as a regression test.
+\texttt{flags[l] = (sum\_l > 17'd100)} is ordinary AND-gate logic consuming a
+word-level CARRY4 result: precisely the macro$\to$boolean edge that was silently
+broken before the staging equations of \S\ref{sec:levelization} existed. It is
+exercised sixteen times per cycle.
+
+Rung 4 is what made the remaining defects findable. Once \texttt{flatten\_test}
+could execute the compiled script on the CPU, a rung-3/rung-4 disagreement
+localised the fault to the kernel and an agreement localised it to the host
+compiler --- where it could be reproduced and bisected in seconds instead of
+through GPU round-trips. Both of the defects in \S\ref{sec:latent} were found
+that way.
 
 The middle rung is what made the remaining defects findable. Once
 \texttt{flatten\_test} could execute the compiled script on the CPU, comparing
@@ -662,9 +843,11 @@ it against the GPU isolated the kernel --- which agreed with it exactly, so
 every surviving error was in the host compiler, where it could be reproduced
 and fixed in seconds rather than through GPU round-trips.
 
-\subsection{Two defects the ladder exposed}
+\subsection{Defects the ladder exposed}
+\label{sec:latent}
 
-Both were silent: correct-looking execution, wrong arithmetic, no diagnostic.
+Every one was silent: correct-looking execution, wrong arithmetic, no
+diagnostic anywhere.
 
 \paragraph{Write-out polarity.}
 A write-out slot stores the value of \texttt{pin\_iv}, which for an inverted
@@ -686,6 +869,79 @@ multiply. One line, two unrelated-looking symptoms, no error at any point.
 \texttt{macro\_layout::CONST\_ONE} is now a distinct sentinel honoured by the
 formatter, the CPU executor and \texttt{GEM\_RD\_BIT} alike.
 
+\paragraph{Duplicate write-outs landing in the macro block.}
+\label{sec:dup-defect}
+The kernel materialises the duplicate write-out words at
+
+\[
+\texttt{shared\_writeouts}\bigl[\,n_{io} - n_s - n_d + i\,\bigr],
+\]
+
+locating the block by subtracting from the \emph{top} of the write-out region.
+Under stock GEM's layout, $\text{normal} \Vert \text{duplicate} \Vert
+\text{SRAM}$, that expression evaluates to $n_w$ and is correct by
+construction. Inserting the macro block between the duplicates and the SRAMs
+shifts it up by $n_m$ words: every duplicate is then written \emph{inside the
+macro block}, and the slots the host actually assigned retain whatever the
+boomerang left in them.
+
+Nothing detects this. All positions remain in range, so the host-side bounds
+assertion passes; the macro phase subsequently overwrites the clobbered macro
+words with correct results, so macro \emph{outputs} still verify. Only operands
+\emph{read} through a duplicate slot are wrong --- that is, only pins a macro
+requires in the opposite polarity from the one the AND-gate cover produced.
+
+The symptom was correspondingly strange. On \texttt{macro\_bench}, CARRY4
+blocks~2 and~3 were exact and blocks~0 and~1 were wrong. Bits $8$--$15$ lie
+above the reach of the per-lane perturbations, so all sixteen lanes there share
+one signal in one polarity and need no duplicate; the low blocks need both
+polarities of $x$ and $x \oplus y$. The error injected at the block-1 boundary
+then propagated up the carry chain with a per-bit halving decay, which reads
+convincingly as an arithmetic bug in the CARRY4 model --- where nothing was
+wrong.
+
+The fix reorders the region to $\text{normal} \Vert \text{macro} \Vert
+\text{duplicate} \Vert \text{SRAM}$, restoring the invariant the kernel already
+assumes. Two lines in \texttt{flatten.rs} and \textbf{no kernel change}, which
+matters directly: teaching the kernel about $n_m$ would have cost a metadata
+word and a live value against the register budget of \S\ref{sec:occupancy}.
+
+\subsection{What the harness must guarantee}
+
+Two of this project's longest debugging episodes were not defects in the
+simulator at all. They are worth recording because both are structural traps
+that any GPU-simulator project can fall into, and both are now prevented by
+construction rather than by remembering.
+
+\paragraph{A \texttt{.gemparts} file is a build product, not an input.}
+It serialises each partition's stages \emph{and its macro batches}, so it
+encodes a snapshot of the scheduler in \texttt{pe.rs}. Changing the scheduler
+and reusing the file causes the simulator to faithfully execute the old
+schedule. One such run presented sixteen DSP48E2 instances that were endpoints,
+held state slots and committed every cycle --- and were never once scheduled
+into a batch, so \texttt{gem\_dsp48e2} was never called. Nothing reports that;
+the accumulators simply never move.
+\texttt{bench/verify\_ladder.sh} now re-maps both flows itself.
+
+\paragraph{A successful build is not proof the binary is current.}
+\texttt{Cargo.toml} declares \texttt{required-features = ["cuda"]} on
+\texttt{cuda\_test}. Cargo \emph{skips} a binary whose required features are
+absent --- silently, with exit status~0. A plain \texttt{cargo build --release}
+therefore relinks \texttt{naive\_sim}, \texttt{flatten\_test} and
+\texttt{cut\_map\_interactive}, leaves \texttt{cuda\_test} untouched, and
+reports success. Successive fixes were then evaluated against a stale kernel
+binary, producing a rung-3 failure whose mismatch counts were \emph{identical
+to the digit} across 32{,}800 comparisons on twelve ports --- which is what
+finally identified the cause, since no code change can leave a wrong answer
+bit-for-bit unchanged. The ladder now builds with \texttt{--features cuda} and
+additionally refuses to run if any file under \texttt{src/}, \texttt{csrc/},
+\texttt{build.rs} or \texttt{Cargo.toml} is newer than the binary.
+
+The general principle is the one this whole section argues: a verification
+harness that can report a result it has not actually established is worse than
+no harness, because it converts an absent measurement into a confident wrong
+one.
+
 %======================================================================
 \section{Measurement Provenance}
 \label{sec:provenance}
@@ -697,6 +953,11 @@ formatter, the CPU executor and \texttt{GEM\_RD\_BIT} alike.
 Figure & Source\\
 \midrule
 Cell counts & \texttt{synth/check\_macros.sh} on both flows\\
+Partition counts & \texttt{cut\_map\_interactive} ``after merging'' log\\
+Script size & \texttt{flatten.rs} ``Built script for'' log line\\
+Throughput, script size & \texttt{bench/throughput.sh}, 5 reps, median\\
+Kernel profile & \texttt{bench/profile.sh} (Nsight Compute)\\
+Ladder results & \texttt{bench/verify\_ladder.sh}\\
 Register / local memory & \texttt{cuobjdump -res-usage} on \texttt{libgemcu.a}\\
 SM count, blocks/SM & \texttt{bench/occupancy\_probe.cu}\\
 Word-state size, descriptors & \texttt{cut\_map\_interactive} log\\

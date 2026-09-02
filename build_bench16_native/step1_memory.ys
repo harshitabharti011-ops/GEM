@@ -1,0 +1,34 @@
+# GEM synthesis step 1 -- memory mapping, with macro interception.
+# Follows usage.md Step 1, with the macro reads added at the top.
+# Placeholders below are filled in by synth/run_synth.sh.
+
+# --- macro interception: these three reads are the whole of deliverable A ---
+# 1. canonical macro cells, as blackboxes. -lib marks every module blackbox.
+read_verilog -lib synth/gem_macros.v
+# 2. the swap layer: Xilinx-named wrappers that resolve to those blackboxes.
+read_verilog -sv synth/macro_normalize.v
+
+# --- the design ---
+# PS note 4 requires IEEE 1800-2012. If -sv chokes on the hidden benchmarks,
+# swap the next line for the Slang frontend:  read_slang --top macro_bench /tmp/macro_bench_16.sv
+read_verilog -sv /tmp/macro_bench_16.sv
+
+hierarchy -check -top macro_bench
+
+# Fold Xilinx-shaped instances down to the canonical cells NOW, before any
+# optimisation pass has a chance to look inside them. _TECHMAP_REPLACE_ in the
+# swap file makes the resulting cell inherit the original instance name, so
+# your VCD hierarchy still reads the way the RTL author wrote it.
+techmap -map synth/macro_normalize.v
+
+# Pin them down: `keep` survives opt_clean -purge in step 2.
+setattr -set keep 1 t:$__GEMDSP_ t:$__GEMCARRY4_ t:$__GEMSRL32_
+
+# --- usage.md Step 1, verbatim from here ---
+proc;;
+opt_expr; opt_dff; opt_clean
+memory -nomap
+memory_libmap -lib aigpdk/memlib_yosys.txt -logic-cost-rom 100 -logic-cost-ram 100
+
+stat
+write_verilog -noattr build_bench16_native/memory_mapped.v

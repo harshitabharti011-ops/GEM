@@ -702,9 +702,32 @@ impl Partition {
             }
         }
 
+        // Sequential-only macros -- a DSP48E2, whose sole output P is clocked
+        // -- also have to be EVALUATED, and nothing above schedules them.
+        //
+        // pending_macros only ever collects macros with combinational outputs,
+        // because those are the ones that must be ordered against boolean
+        // logic. A DSP has none, so it never entered a batch, and the kernel's
+        // macro phase iterates batches: gem_dsp48e2 was therefore never
+        // called on any input. Its P output stayed at its initial value for
+        // the whole run, which is exactly the frozen acc0/acc1 the VCD
+        // comparison reports.
+        //
+        // Being an endpoint gets a macro a state slot and a commit; it does
+        // not get it evaluated. Both are needed.
+        let mut pending_seq_macros = IndexSet::<usize>::new();
+        for &endpt_i in endpoints {
+            if let EndpointGroup::Macro(mb) = staged.get_endpoint_group(aig, endpt_i) {
+                if !mb.kind.has_comb_outputs() {
+                    pending_seq_macros.insert(mb.cellid);
+                }
+            }
+        }
+
         let mut stages = Vec::<BoomerangStage>::new();
         let mut total_write_outs = 0;
-        while !unrealized_comb_outputs.is_empty() || !pending_macros.is_empty() {
+        while !unrealized_comb_outputs.is_empty() || !pending_macros.is_empty()
+              || !pending_seq_macros.is_empty() {
             let mut stage = if unrealized_comb_outputs.is_empty() {
                 // Nothing boolean left, but macros still need somewhere to
                 // run: emit a hierarchy-free stage to carry them.
@@ -729,9 +752,27 @@ impl Partition {
                 .filter(|c| aig.macros[c].comb_inputs().iter()
                             .all(|i| realized_inputs.contains(i)))
                 .collect();
-            if !ready.is_empty() {
+            // A sequential macro is ready once EVERY operand it latches is
+            // realised -- for_each_seq_input, not comb_inputs, because a DSP's
+            // A/B/C/D are all consumed on the edge.
+            let ready_seq: Vec<usize> = pending_seq_macros.iter().copied()
+                .filter(|c| {
+                    let mut ok = true;
+                    aig.macros[c].for_each_seq_input(|i| {
+                        if !realized_inputs.contains(&i) { ok = false }
+                    });
+                    ok
+                })
+                .collect();
+            if std::env::var("GEM_DBG_SCHED").is_ok() {
+                eprintln!("SCHED unreal={} pend_comb={} pend_seq={} ready={} \
+                           ready_seq={}",
+                    unrealized_comb_outputs.len(), pending_macros.len(),
+                    pending_seq_macros.len(), ready.len(), ready_seq.len());
+            }
+            if !ready.is_empty() || !ready_seq.is_empty() {
                 let mut by_kind = IndexMap::<MacroKind, Vec<usize>>::new();
-                for &c in &ready {
+                for &c in ready.iter().chain(ready_seq.iter()) {
                     by_kind.entry(aig.macros[&c].kind).or_default().push(c);
                 }
                 stage.macro_ops = by_kind.into_iter()
@@ -743,9 +784,18 @@ impl Partition {
                         if o != 0 { realized_inputs.insert(o); }
                     }
                 }
+                for c in ready_seq {
+                    pending_seq_macros.swap_remove(&c);
+                    // Deliberately NOT added to realized_inputs. A clocked
+                    // output is read from state on a later cycle, exactly like
+                    // a DFF's Q; marking it realised here would invite boolean
+                    // logic in this same partition to consume a value the
+                    // macro phase has not produced yet.
+                }
             }
             else if unrealized_comb_outputs.is_empty()
-                    && !pending_macros.is_empty() {
+                    && (!pending_macros.is_empty()
+                        || !pending_seq_macros.is_empty()) {
                 // No boolean work left and nothing became ready: the remaining
                 // macros depend on values this partition never produces.
                 //

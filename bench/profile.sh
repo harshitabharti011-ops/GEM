@@ -35,9 +35,12 @@
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
+TOP=${TOP:-macro_smoke}
+SHRED=${SHRED:-build_shred}
+NATIVE=${NATIVE:-build_native}
 NB=${NB:-40}            # identical on both sides
 CYC=${CYC:-200}         # metrics are rates; a short run keeps ncu replay cheap
-V=build_native/in.vcd
+V=${V:-$NATIVE/in.vcd}
 
 METRICS="dram__throughput.avg.pct_of_peak_sustained_elapsed,\
 sm__warps_active.avg.pct_of_peak_sustained_active,\
@@ -55,7 +58,7 @@ run() {
     ncu --metrics "$METRICS" \
         --kernel-name simulate_v1_noninteractive_simple_scan \
         --launch-count 1 --target-processes all \
-        ./target/release/cuda_test --top-module macro_smoke \
+        ./target/release/cuda_test --top-module "$TOP" \
         --max-cycles "$CYC" \
         "$dir/gatelevel.gv" "$dir/r.gemparts" \
         "$V" "/tmp/prof_$(basename "$dir").vcd" "$NB" 2>&1 \
@@ -68,8 +71,8 @@ echo "Registers:"
 cuobjdump -res-usage "$(find target/release -name libgemcu.a | head -1)" \
   | grep -A1 simulate_v1 | sed 's/^ */  /'
 
-run "SHREDDED BASELINE" build_shred
-run "MACRO-PRESERVING"  build_native
+run "SHREDDED BASELINE" "$SHRED"
+run "MACRO-PRESERVING"  "$NATIVE"
 
 echo
 echo "================================================================"
