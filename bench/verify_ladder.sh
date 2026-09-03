@@ -44,37 +44,8 @@ CYC=${CYC:-400}       # cycles compared; must not exceed what the VCD holds
 # cuda_test is the one that fails silently, because it is the only target that
 # needs nvcc and the CUDA libraries. If it cannot link, everything else still
 # builds. Set BUILD=0 only when you have just built by hand.
-if [ "${BUILD:-1}" = "1" ]; then
-  echo "==> build"
-  # --features cuda is NOT optional. Cargo.toml declares
-  #     [[bin]] name = "cuda_test"  required-features = ["cuda"]
-  # and cargo SKIPS a bin whose required features are off -- silently, with
-  # exit status 0. `cargo build --release` therefore relinks naive_sim,
-  # flatten_test and cut_map_interactive, leaves cuda_test untouched, and
-  # reports success. The ladder then runs an old kernel binary against a fresh
-  # script and blames the kernel.
-  if ! cargo build --release --features cuda > /tmp/gem_build.log 2>&1; then
-      echo "BUILD FAILED -- refusing to run the ladder against stale binaries."
-      echo "(CUDA env: CUDA_LIBRARY_PATH must point at the CUDA root, and"
-      echo " UCC_CUDA_GENCODE must match this GPU's compute capability.)"
-      tail -30 /tmp/gem_build.log
-      exit 1
-  fi
-  ls -l --time-style=+%H:%M:%S target/release/cuda_test \
-        target/release/flatten_test target/release/naive_sim \
-        target/release/cut_map_interactive | sed 's/^/    /'
-  # Belt and braces: a successful build is not proof the binary is current.
-  # Compare it against the sources directly, so a future gate that skips it
-  # for some other reason cannot produce a result we would believe.
-  STALE=$(find src csrc build.rs Cargo.toml -type f \
-            -newer target/release/cuda_test 2>/dev/null | head -5)
-  if [ -n "$STALE" ]; then
-      echo "STALE cuda_test -- these sources are newer than the binary:"
-      echo "$STALE" | sed 's/^/    /'
-      echo "Refusing to run. Build with: cargo build --release --features cuda"
-      exit 1
-  fi
-fi
+. bench/env.sh
+if [ "${BUILD:-1}" = "1" ]; then gem_build || exit 1; fi
 
 # Remap both flows unless REMAP=0.
 #

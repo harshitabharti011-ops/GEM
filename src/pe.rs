@@ -633,17 +633,6 @@ impl Partition {
                 },
             }
         }
-        let num_output_dups = comb_outputs_activations.iter()
-            .map(|(_, ckens)| ckens.len() - 1)
-            .sum::<usize>();
-        let num_reserved_writeouts =
-            num_srams + num_macro_slots + (num_output_dups + 31) / 32;
-        if num_reserved_writeouts >= BOOMERANG_MAX_WRITEOUTS ||
-            num_srams * 4 + num_output_dups > BOOMERANG_MAX_WRITEOUTS
-        {
-            // overflowed writeout
-            return None
-        }
         // Discover the combinational macros this partition has to evaluate.
         // A sequential macro is an endpoint and commits at writeout; a
         // combinational one (CARRY4, or an SRLC32E read) sits inside the cone
@@ -679,6 +668,58 @@ impl Partition {
                 }
             }
         }
+        // Charge the in-cone macros to the write-out budget.
+        //
+        // This MUST happen after the probe above and before the budget is
+        // struck, and the ordering is what the original code got wrong. The
+        // endpoint loop charges only macros that are ENDPOINTS -- a DSP48E2,
+        // whose P is a partition output. A CARRY4 or an SRLC32E read sits
+        // INSIDE the cone and is discovered only by the probe, yet the
+        // flattener reserves write-out slots for it exactly the same way.
+        //
+        // Budgeting before the probe therefore under-counts by every in-cone
+        // macro in the partition. The partitioner accepts a partition it
+        // cannot lay out, and the overflow surfaces later as
+        //     "partition needs 263 writeout slots but a boomerang partition
+        //      holds at most 256 (134 normal + 1 duplicate + 128 macro)"
+        // from make_inputs_outputs -- by which point the partitioner has
+        // already committed and there is no path back to splitting further.
+        //
+        // Small designs hid it: with few macros the slack absorbed the
+        // under-count. It first bites where the macro block is large, which is
+        // precisely the many-macro regime this work exists to serve.
+        for &cellid in pending_macros.iter() {
+            let mb = &aig.macros[&cellid];
+            num_macro_slots += (mb.kind.num_outputs() + 31) / 32;
+            // Operands are costed the same way the endpoint arm costs them, so
+            // this budget matches what the flattener will actually place.
+            // Another macro's combinational output is skipped: it owns a bit
+            // in the macro block already and is not a boolean write-out.
+            for &in_iv in mb.in_iv.iter() {
+                if in_iv <= 1 || in_iv == usize::MAX { continue }
+                if aig.is_comb_macro_output(in_iv >> 1) { continue }
+                comb_outputs_activations.entry(in_iv >> 1)
+                    .or_default().insert(mb.clk_en_iv << 1 | (in_iv & 1));
+            }
+            if mb.clk_en_iv > 1
+                && !aig.is_comb_macro_output(mb.clk_en_iv >> 1) {
+                comb_outputs_activations.entry(mb.clk_en_iv >> 1)
+                    .or_default().insert(2 | (mb.clk_en_iv & 1));
+            }
+        }
+
+        let num_output_dups = comb_outputs_activations.iter()
+            .map(|(_, ckens)| ckens.len() - 1)
+            .sum::<usize>();
+        let num_reserved_writeouts =
+            num_srams + num_macro_slots + (num_output_dups + 31) / 32;
+        if num_reserved_writeouts >= BOOMERANG_MAX_WRITEOUTS ||
+            num_srams * 4 + num_output_dups > BOOMERANG_MAX_WRITEOUTS
+        {
+            // overflowed writeout
+            return None
+        }
+
         // Their inputs become things the boolean hierarchy must realise; their
         // outputs are produced by the macro op itself, so they are removed
         // from the boolean work list -- no AND-gate cover can produce them.

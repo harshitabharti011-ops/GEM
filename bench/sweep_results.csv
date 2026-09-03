@@ -1,0 +1,9 @@
+lanes,flow,cells,dffs,macros,partitions,script_u32,median_ms,cycles_per_s
+8,shred,,,,4,342016,13.506,29616
+8,native,,,,1+1,74820,31.555,12676
+16,shred,,,,6,527360,16.525,24206
+16,native,,,,2+1,116340,26.841,14903
+32,shred,,,,11,980480,20.780,19249
+32,native,,,,7+1,400640,38.954,10268
+64,shred,,,,22,2004992,32.298,12385
+64,native,,,,,,FAIL,

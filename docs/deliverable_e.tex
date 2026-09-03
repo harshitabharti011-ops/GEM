@@ -1,975 +1,983 @@
-% Deliverable E -- Documentation & Reports
-% Takneek PS Zenith: The Big-GEM Theory
-%
-% Every number in this document is a measurement, not an estimate. Figures that
-% are not yet measured are marked \PENDING and must not be replaced with a
-% guess. Measurement provenance is given in Section~\ref{sec:provenance}.
-\documentclass[11pt,a4paper]{article}
-
-\usepackage[margin=1in]{geometry}
-\usepackage{amsmath,amssymb}
+\documentclass[11pt]{article}
+\usepackage[margin=0.95in,top=0.9in,bottom=0.9in]{geometry}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta,positioning,shapes.geometric,calc,fit,backgrounds,decorations.pathreplacing}
 \usepackage{booktabs}
-\usepackage{listings}
+\usepackage{amsmath,amssymb}
 \usepackage{xcolor}
-\usepackage{hyperref}
-\hypersetup{colorlinks=true,linkcolor=blue!50!black,urlcolor=blue!50!black}
+\usepackage[expansion=false]{microtype}
+\usepackage{enumitem}
+\usepackage[font=small]{caption}
+\usepackage{titlesec}
+\usepackage{multicol}
+\usepackage[colorlinks=true,linkcolor=blue!55!black,urlcolor=blue!55!black,citecolor=blue!55!black]{hyperref}
 
-\newcommand{\PENDING}{\textcolor{red}{\textbf{[PENDING]}}}
-\newcommand{\eval}{\operatorname{eval}}
-\newcommand{\avail}{\operatorname{avail}}
-\newcommand{\combin}{\operatorname{combin}}
-\newcommand{\seqin}{\operatorname{seqin}}
-\newcommand{\fanin}{\operatorname{fanin}}
+\titlespacing*{\section}{0pt}{1.4ex plus .3ex}{0.8ex}
+\titlespacing*{\subsection}{0pt}{1.1ex plus .2ex}{0.5ex}
+\setlist[itemize]{topsep=2pt,itemsep=1pt,parsep=0pt,leftmargin=1.4em}
+\setlist[enumerate]{topsep=2pt,itemsep=1pt,parsep=0pt,leftmargin=1.6em}
+\captionsetup{skip=4pt}
 
-\lstset{
-  basicstyle=\ttfamily\footnotesize,
-  breaklines=true,
-  frame=single,
-  columns=fullflexible,
-  keepspaces=true,
+\definecolor{cbox}{RGB}{237,242,252}
+\definecolor{cline}{RGB}{120,140,175}
+\definecolor{mbox}{RGB}{253,240,225}
+\definecolor{mline}{RGB}{201,138,71}
+\definecolor{gbox}{RGB}{232,245,235}
+\definecolor{gline}{RGB}{93,150,110}
+\definecolor{rbox}{RGB}{250,235,235}
+\definecolor{rline}{RGB}{178,94,94}
+\definecolor{note}{RGB}{110,110,120}
+
+\tikzset{
+  blk/.style={draw=cline,fill=cbox,rounded corners=2pt,align=center,font=\scriptsize,
+              inner sep=3.5pt,minimum height=7.5mm},
+  mblk/.style={blk,draw=mline,fill=mbox},
+  gblk/.style={blk,draw=gline,fill=gbox},
+  rblk/.style={blk,draw=rline,fill=rbox},
+  dec/.style={draw=cline,fill=white,diamond,aspect=2.6,align=center,font=\scriptsize,inner sep=1pt},
+  ar/.style={-{Stealth[length=4pt]},draw=cline!140,thick},
+  lbl/.style={font=\scriptsize\itshape,text=note,inner sep=1.5pt},
 }
 
-\title{Native Word-Level Macro Evaluation in a GPU RTL Simulator\\
-       \large Deliverable E: Scheduling Equations, Memory Architecture,\\
-       Occupancy Analysis and Verification Methodology}
-\author{Takneek Zenith --- The Big-GEM Theory}
-\date{}
+\newcommand{\M}{\textcolor{blue!45!black}{\scriptsize\textsc{[measured]}}}
+\newcommand{\V}{\textcolor{green!35!black}{\scriptsize\textsc{[verified]}}}
+\newcommand{\I}{\textcolor{note}{\scriptsize\textsc{[implemented]}}}
+\newcommand{\F}{\textcolor{purple!60!black}{\scriptsize\textsc{[inferred]}}}
+\newcommand{\Pj}{\textcolor{red!55!black}{\scriptsize\textsc{[projected]}}}
+\newcommand{\code}[1]{\texttt{\small #1}}
 
 \begin{document}
-\maketitle
-
-\begin{abstract}
-We extend NVIDIA's GEM boomerang-scheduled GPU logic simulator so that
-DSP48E2, CARRY4 and SRLC32E primitives survive Yosys synthesis as word-level
-cells and are evaluated natively on the GPU ALU, instead of being shredded into
-1-bit AND-inverter logic. This document gives the modified levelization
-equations that make a heterogeneous DAG schedulable, the VRAM layout that keeps
-macro operands 64-bit aligned and coalesced, a measured occupancy and register
-profile on \texttt{sm\_86}, an alignment invariant that variable-length
-instruction sections must preserve, and a layered verification argument in
-which each oracle's authority is bounded explicitly rather than assumed.
-\end{abstract}
-
-%======================================================================
-\section{The Invariant That Macros Break}
-%======================================================================
-
-Stock GEM rests on a single structural invariant:
-
-\begin{quote}
-\emph{Every value inside a partition is produced by the AND-gate cover, and
-reaches its consumers through the boomerang hierarchy.}
-\end{quote}
-
-Word-level macros violate it in three independent ways. A macro output is
-produced by a separate evaluation phase, written into a separate buffer, on a
-separate schedule. Each consequence had to be addressed explicitly, and the
-equations in Section~\ref{sec:sched} exist precisely to restore a well-defined
-order once the invariant no longer holds.
-
-Concretely, in the kernel the boomerang stages of one partition communicate
-through \texttt{shared\_state}, while the macro evaluation phase writes into
-\texttt{shared\_writeouts}. These are different buffers. A macro result
-therefore cannot become visible to boolean logic within the same partition at
-all --- not in a later boomerang stage, not under any batching order. The only
-ordering primitive strong enough is the cooperative grid synchronisation
-between \emph{major} stages, and the scheduling equations are built around that
-fact.
-
-%======================================================================
-\section{Modified DAG Levelization Equations}
-\label{sec:levelization}
-\label{sec:sched}
-%======================================================================
-
-\subsection{Notation}
-
-Let $G=(V,E)$ be the AND-inverter graph after macro-preserving synthesis. Each
-$v \in V$ is an \emph{aigpin}. Write:
-
-\begin{itemize}
-  \item $\fanin(v)$ --- the AND-gate fan-in of $v$ (empty for non-AND nodes);
-  \item $\mathcal{M}$ --- the set of macro instances;
-  \item $\combin(m)$ --- the \emph{combinational} input pins of macro $m$
-        (CARRY4: $S,DI,CIN,CYINIT$; SRLC32E: $A[4{:}0]$; DSP48E2: $\emptyset$);
-  \item $\seqin(m)$ --- \emph{all} pins macro $m$ latches on the clock edge,
-        including its clock enable;
-  \item $\mathcal{O}_c \subset V$ --- aigpins driven by a \emph{combinational}
-        macro output (CARRY4 $CO,O$; SRLC32E $Q,Q_{31}$);
-  \item $\mathcal{O}_s \subset V$ --- aigpins driven by a \emph{clocked} macro
-        output (DSP48E2 $P$).
-\end{itemize}
-
-We define two integer labels per node. They coincide everywhere except on
-$\mathcal{O}_c$, and that single point of divergence is the entire content of
-the heterogeneous schedule.
-
-\begin{description}
-  \item[$\avail(v)$] the major stage in which $v$'s value may be \emph{read} by
-        boolean logic;
-  \item[$\eval(v)$] the major stage in which the producer of $v$ is
-        \emph{executed}.
-\end{description}
-
-\subsection{The equations}
-
-\begin{align}
-\avail(v) &= 0, &&
-  \begin{aligned}
-  &v \text{ a primary input, DFF } Q, \text{ SRAM read data,}\\
-  &\text{or } v \in \mathcal{O}_s
-  \end{aligned}
-  \label{eq:leaf}\\[4pt]
-\avail(v) &= \max_{u \in \fanin(v)} \avail(u), && v \text{ an AND gate}
-  \label{eq:and}\\[4pt]
-\eval(m)  &= \max_{p \in \combin(m)}
-             \begin{cases}
-               \eval(p) & p \in \mathcal{O}_c\\
-               \avail(p) & \text{otherwise}
-             \end{cases}, && m \in \mathcal{M}
-  \label{eq:eval}\\[4pt]
-\avail(v) &= \eval(m) + 1, && v \in \mathcal{O}_c \text{ driven by } m
-  \label{eq:plusone}
-\end{align}
-
-Four properties follow, and each one is load-bearing.
-
-\paragraph{(P1) Boolean depth is free.}
-Equation~\eqref{eq:and} takes a maximum, never an increment. An arbitrarily
-deep cone of AND gates evaluates inside one major stage, exactly as in stock
-GEM. The boomerang hierarchy is untouched.
-
-\paragraph{(P2) Clocked macro outputs cost nothing.}
-By~\eqref{eq:leaf}, $\mathcal{O}_s$ is a level-0 leaf. A DSP's $P$ is read from
-global state like a DFF's $Q$: what a reader observes this cycle is last
-cycle's commit, which is the correct register semantics and requires no
-boundary.
-
-\paragraph{(P3) Macro-to-macro chaining costs nothing.}
-The case split in~\eqref{eq:eval} takes $\eval$, not $\avail$, of an operand
-that is itself a combinational macro output. Hence a CARRY4 chain of any length
---- $CO[3] \rightarrow CIN$, the dependency the problem statement names
-explicitly --- resolves inside a single major stage. Ordering within the stage
-is supplied by emitting one batch per chain link, separated by
-\texttt{\_\_syncthreads()}. Without this case split a 64-bit carry-chain adder
-would demand 16 major stages, and a wide datapath would exceed the kernel's
-hard limit of 32.
-
-\paragraph{(P4) Only macro-to-boolean pays.}
-The $+1$ in~\eqref{eq:plusone} is charged exactly once, and only where a
-combinational macro result must cross into the AND-gate domain. It is the
-minimum price consistent with the buffer separation described in
-Section~1.
-
-\subsection{Stage construction}
-
-Let $D = \max_{v} \eval(v)$ extended over endpoints. Major stage $j \in
-[0,D]$ is then defined by:
-
-\begin{align}
-\text{endpoints}(j) &= \Bigl\{ e : \max_{p \in \text{inputs}(e)} \avail(p) = j \Bigr\}\\
-\text{macros}(j)    &= \{ m \in \mathcal{M} : \eval(m) = j \}\\
-\text{forward}(j)   &= \{ v : \eval(v) \le j \;\wedge\; \exists\, c \in
-                       \text{consumers}(v),\ \eval(c) > j \}
-\end{align}
-
-$\text{forward}(j)$ becomes the staged I/O pin set of stage $j$ and the primary
-input set of stage $j{+}1$. Its second clause is the subtle one: a node with
-$\eval(v) = j$ but $\avail(v) = j{+}1$ --- that is, a combinational macro
-output produced by stage $j$'s macro phase --- must be forwarded even though it
-is not readable in the stage that produces it.
-
-\paragraph{Regression guarantee.}
-If $\mathcal{O}_c = \emptyset$ then $D = 0$ by construction, and the entire
-macro-aware path is bypassed in favour of the unmodified level-split staging.
-A macro-free netlist is therefore scheduled bit-identically to stock GEM. This
-is what makes the baseline comparison in Section~\ref{sec:verif} meaningful
-rather than circular, and it is asserted directly by unit test
-\texttt{nothing\_but\_a\_combinational\_macro\_can\_raise\_a\_stage}.
-
-\subsection{Measured instantiation}
-
-On \texttt{synth/tests/macro\_smoke.sv} (2 DSP48E2, 4 chained CARRY4,
-1 SRLC32E, plus ordinary RTL), the equations yield $D = 1$:
 
 \begin{center}
-\begin{tabular}{llr}
+{\LARGE\bfseries Native Word-Level Macro Evaluation\\[2pt] in a GPU RTL Simulator}\\[6pt]
+{\large Takneek 2026 $\cdot$ Zenith --- \emph{The Big-GEM Theory}}\\[10pt]
+{\normalsize Deliverable E: Scheduling Equations, Memory Architecture,\\
+Verification Methodology and Performance Analysis}\\[14pt]
+\rule{0.55\textwidth}{0.4pt}\\[6pt]
+{\bfseries Done by Pool Shauryas}\\[5pt]
+\begin{minipage}{0.8\textwidth}\centering\small
+Harshita Bharti \quad$\cdot$\quad Lavanya Prakash \quad$\cdot$\quad Aditi \quad$\cdot$\quad Aahana\\[2pt]
+Gauri Singh \quad$\cdot$\quad Soundarya Murugaiyan \quad$\cdot$\quad Dharshini S\\[2pt]
+Swadha Singh \quad$\cdot$\quad Ashritha Aryapu
+\end{minipage}\\[4pt]
+\rule{0.55\textwidth}{0.4pt}
+\end{center}
+
+\vspace{2pt}
+\noindent\textbf{Abstract.}\;
+We extend NVIDIA's GEM boomerang-scheduled GPU logic simulator so that
+\code{DSP48E2}, \code{CARRY4} and \code{SRLC32E} primitives survive Yosys synthesis as
+word-level cells and are evaluated natively on the GPU ALU using \code{int64\_t}
+arithmetic, instead of being shredded into 1-bit AND-inverter logic. The
+heterogeneous schedule is defined by two integer labels per graph node,
+$\mathrm{avail}$ and $\mathrm{eval}$, whose single point of divergence is the only
+synchronisation the design pays for. The implementation is complete for all three
+primitives and verified against netlist-level ground truth at every port and every
+timestamp. It reduces AIG cell count by $14.8\times$ and the per-cycle instruction
+script by $4.53\times$, which carries the script across the L2 capacity and drops DRAM
+throughput from $46.91\,\%$ of peak to $0.04\,\%$. End-to-end throughput is
+$0.61\times$ the shredded baseline at 16 lanes; the profile attributes the entire
+difference to one additional grid synchronisation per simulated cycle, measured two
+independent ways, and \S\ref{sec:next} names the single equation term that removes it.
+
+\smallskip
+\noindent{\footnotesize\textbf{Evidence tags.}
+\M{} instrument output, command in \S\ref{sec:prov}.\;
+\V{} compared against an independent reference, with the comparison count stated.\;
+\I{} a property of the source, citable to file and line.\;
+\F{} a conclusion drawn from named measurements.\;
+\Pj{} a prediction, never used to support a performance claim.}
+
+\vspace{-2pt}
+{\setcounter{tocdepth}{1}\small\tableofcontents}
+
+\section{Executive Summary}
+
+\textbf{Problem.} GEM attains its throughput by reducing all logic to 1-bit
+AND-inverter form, which forces the frontend to shred word-level FPGA primitives.
+\M{} One \code{DSP48E2}, four \code{CARRY4} and one \code{SRLC32E} expand from 95 AIG
+cells to 9,922 --- $104\times$. GEM re-reads its entire compiled instruction script
+from global memory on \emph{every simulated cycle}, so that expansion is paid as
+memory bandwidth once per cycle for the life of the run.
+
+\textbf{What we built.} \I{} A macro-preserving path through the whole stack:
+Yosys interception (\S\ref{sec:front}), a heterogeneous DAG schedule with two labels
+per node (\S\ref{sec:sched}), a warp-padded 64-bit aligned VRAM layout with
+CSR-indexed descriptors (\S\ref{sec:vram}), and a macro evaluation phase inside the
+boomerang kernel (\S\ref{sec:cuda}). 1,591 lines of new host and device code; GEM's
+boomerang reduction tree itself is unmodified.
+
+\textbf{Headline numbers}, \code{macro\_bench} at 16 lanes, RTX 3050 Laptop
+(\code{sm\_86}), identical stimulus and identical \code{num\_blocks} on both sides:
+
+\begin{center}\small
+\begin{tabular}{lrrl}
 \toprule
-Major stage & Contents & Boomerang depth\\
+Quantity & Shredded baseline & Macro-preserving & \\
 \midrule
-0 & 4 CARRY4 (chained), 1 SRLC32E, 2 DSP48E2, 8 DFF, ordinary cone & 7\\
-1 & primary outputs consuming macro results & 4\\
+AIG cells                        & 85,444 & \textbf{5,754} & \M{} $14.8\times$ fewer\\
+Instruction script, per cycle    & 2,060.0\,KiB & \textbf{454.5\,KiB} & \M{} $4.53\times$ smaller\\
+Script vs L2 (1,536\,KiB)        & $1.34\times$ --- spills & $\mathbf{0.30\times}$ --- fits & \M{} residency crossed\\
+DRAM throughput (\% of peak)     & 46.91 & \textbf{0.04} & \M{} $1{,}173\times$ less traffic\\
+Warps active (\% of peak)        & 33.33 & 33.33 & \M{} occupancy identical\\
+Local memory ld/st (sectors)     & 0 & 0 & \M{} nothing spills\\
+Grid barriers per simulated cycle& 1 & 2 & \I{} the one added cost\\
+\midrule
+\textbf{Throughput (cycles/s)}   & \textbf{22,426} & \textbf{13,657} & \M{} $0.61\times$\\
 \bottomrule
 \end{tabular}
 \end{center}
 
-The four chained CARRY4s all satisfy $\eval = 0$ by (P3), confirming that the
-16-bit carry chain costs no additional grid synchronisation.
+\textbf{Correctness.} \V{} All four rungs of the verification ladder pass on the
+16-lane benchmark, 32,800 port$\times$timestamp comparisons each; the
+\code{macro\_smoke} regression passes at 49,200. \V{} The three macro models agree
+with an independent Python transcription of the problem-statement equations over
+14,552 vectors, of which the 1,024 \code{CARRY4} cases are exhaustive.
 
-On the scaled benchmark \texttt{bench/macro\_bench.sv} at $\text{LANES}=16$
-(16 DSP48E2, 64 CARRY4 in 16 four-block chains, 16 SRLC32E, 96 macros in all)
-the equations again yield $D = 1$, and the 64 chained CARRY4s occupy
-\emph{four batches within one major stage} rather than four stages:
+\textbf{Where the time goes.} \F{} After eliminating memory bandwidth, register
+spilling and occupancy against measured quantities, the extra grid barrier is the
+only structural difference left between the two configurations. Two independent
+timings size it: $37.75\,\mu$s/cycle from the profiler and $31.1\,\mu$s/cycle from
+wall clock. \S\ref{sec:next} specifies the change that removes it.
 
-\begin{center}
-\begin{tabular}{llrr}
+\section{Rubric Coverage}
+
+\begin{center}\footnotesize
+\begin{tabular}{@{}p{0.31\textwidth}p{0.42\textwidth}l@{}}
+\toprule
+Requirement & Implementation & Section\\
+\midrule
+\multicolumn{3}{@{}l}{\textbf{A --- Host Parser \& Yosys Pre-Processor (15)}}\\
+Intercept \code{DSP48E2}/\code{CARRY4}/\code{SRLC32E}
+   & \code{synth/gem\_macros.v} (3 blackboxes); \code{macro\_normalize\_xilinx.v} maps real Xilinx ports & \S\ref{sec:front}\\
+Prevent techmap / ABC shredding
+   & \code{(* blackbox *)} $+$ \code{setattr -set keep 1} in \code{step2\_logic.ys} & \S\ref{sec:front}\\
+Yosys 0.68 JSON netlist compatibility
+   & \code{write\_json} in both flows; consumed by \code{check\_macros.sh} & \S\ref{sec:front}\\
+64-bit aligned, coalesced buffers
+   & \code{MacroLayout::build} (\code{macro\_layout.rs:131}), \code{UVec<u64>} & \S\ref{sec:vram}\\
+\midrule
+\multicolumn{3}{@{}l}{\textbf{B --- CUDA Engine \& Boomerang Modification (35)}}\\
+Modified levelized DAG equations
+   & \code{macro\_avail\_stage}, \code{staging.rs}, \code{build\_staged\_\dots} & \S\ref{sec:sched}\\
+Mixed-width scheduling without stalling warps
+   & type-homogeneous \code{MacroBatch}, \code{pe.rs:31} & \S\ref{sec:cuda}\\
+Macro$\to$macro ordering ($CO[3]\!\to\!CIN$) without boolean nodes
+   & one batch per chain link, \code{ready} vs \code{realized\_inputs}, \code{pe.rs:751} & \S\ref{sec:sched}\\
+Native evaluation on the GPU ALU
+   & \code{kernel\_v1\_impl.cuh:305--437}; \code{gem\_dsp48e2}, \code{gem\_carry4}, \code{gem\_srlc32e} & \S\ref{sec:cuda}\\
+Shared memory \& warp-level primitives
+   & \code{shared\_writeouts} hosts macro operands; \code{\_\_shfl\_down\_sync} preserved at 5 sites; \code{\_\_syncthreads()} orders chains & \S\ref{sec:cuda}\\
+\midrule
+\multicolumn{3}{@{}l}{\textbf{C --- Hardware Macro Implementations (20)}}\\
+DSP48E2 subset, PREG-only clocked & \code{gem\_dsp48e2}, \code{csrc/macros.cuh} & \S\ref{sec:macros}\\
+CARRY4 exact silicon logic        & \code{gem\_carry4}, \code{macros.cuh:132} & \S\ref{sec:macros}\\
+SRLC32E clock-edge semantics      & \code{gem\_srlc32e\_read} / \code{\_edge} & \S\ref{sec:macros}\\
+Own behavioural verification, no golden reference supplied
+   & \code{csrc/tests/reference\_model.py} $+$ \code{dump\_vectors.cpp} $+$ \code{verify\_macros.sh} & \S\ref{sec:verif}\\
+\midrule
+\multicolumn{3}{@{}l}{\textbf{D --- Benchmarks \& Performance Analysis (20)}}\\
+Throughput vs unmodified GEM, cycles/s & \code{bench/throughput.sh}, \code{bench/sweep.sh} & \S\ref{sec:bench}\\
+Memory bandwidth utilisation (Nsight)  & \code{bench/profile.sh}, \code{--replay-mode application} & \S\ref{sec:bench}\\
+Warp divergence metrics (Nsight)       & \code{smsp\_\_thread\_inst\_executed} ratio & \S\ref{sec:bench}\\
+\midrule
+\multicolumn{3}{@{}l}{\textbf{E --- Documentation \& Reports (10)}}\\
+Mathematical scheduling equations & Eq.~(1)--(4) with P1--P4 & \S\ref{sec:sched}\\
+Architectural block diagrams (Global / Shared / Registers) & Fig.~\ref{fig:mem} & \S\ref{sec:vram}\\
+Extensive numerical analysis & \S\ref{sec:bench} & \S\ref{sec:bench}\\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\section{Architecture Overview}
+
+Stock GEM rests on one structural invariant: \emph{every value inside a partition is
+produced by the AND-gate cover, and reaches its consumers through the boomerang
+hierarchy}. A word-level macro violates it three times over --- it is produced by a
+separate evaluation phase, written into a separate buffer, on a separate schedule.
+Each consequence is addressed explicitly, and the equations of \S\ref{sec:sched}
+exist to restore a well-defined order once the invariant no longer holds.
+
+\begin{figure}[h]\centering
+\begin{tikzpicture}[node distance=5.5mm]
+\node[blk] (rtl) {SystemVerilog\\RTL};
+\node[mblk,right=of rtl] (yos) {\textbf{Yosys}\\macros kept};
+\node[mblk,right=of yos] (aig) {AIG build\\\code{MacroBlock}};
+\node[mblk,right=of aig] (stage) {major staging\\avail / eval};
+\node[mblk,below=7mm of stage] (part) {partition $+$\\macro batches};
+\node[mblk,left=of part] (lay) {layout $+$\\script emit};
+\node[mblk,left=of lay] (vram) {VRAM\\descriptors};
+\node[blk,left=of vram] (ker) {CUDA kernel\\boomerang $+$ macro};
+\node[blk,below=7mm of ker] (vcd) {output VCD};
+\draw[ar] (rtl)--(yos); \draw[ar] (yos)--(aig); \draw[ar] (aig)--(stage);
+\draw[ar] (stage)--(part); \draw[ar] (part)--(lay); \draw[ar] (lay)--(vram);
+\draw[ar] (vram)--(ker); \draw[ar] (ker)--(vcd);
+\node[lbl,above=0.5mm of yos] {\S\ref{sec:front}};
+\node[lbl,above=0.5mm of stage] {\S\ref{sec:sched}, eq.~(1)--(4)};
+\node[lbl,below=0.5mm of part] {\S\ref{sec:cuda}};
+\node[lbl,below=0.5mm of vram] {\S\ref{sec:vram}};
+\end{tikzpicture}
+\caption{The compilation pipeline. Shaded stages are new or substantially modified;
+the kernel retains GEM's boomerang tree unchanged and gains a macro phase between
+write-out settle and commit.}
+\label{fig:pipe}
+\end{figure}
+
+\section{Host Parser and Yosys Pre-Processor}\label{sec:front}
+
+\I{} \code{synth/gem\_macros.v} declares exactly three blackboxes, and these are the
+only macro cell names that ever reach GEM's Rust netlist parser:
+\code{\$\_\_GEMDSP\_}, \code{\$\_\_GEMCARRY4\_}, \code{\$\_\_GEMSRL32\_}. The naming
+follows GEM's own convention for library macros (\code{\$\_\_RAMGEM\_SYNC\_}), so
+\code{src/aigpdk.rs:34} matches on these identifiers and never on Xilinx spellings.
+
+\begin{figure}[h]\centering
+\begin{tikzpicture}[x=1mm,y=1mm]
+\node[blk,minimum width=16mm] (cell) at (0,0) {cell in\\netlist};
+\node[dec] (isx) at (24,0) {Xilinx\\spelling?};
+\node[mblk,minimum width=44mm] (norm) at (30,21)
+   {\code{macro\_normalize\_xilinx.v}\\{\scriptsize OPMODE$\to$2-bit MODE,\; INMODE$\to$USE\_PREADD}};
+\node[dec] (isg) at (60,0) {one of the\\three macros?};
+\node[mblk,minimum width=30mm] (bb) at (100,11) {\code{(* blackbox *)} $+$ \code{keep 1}\\{\scriptsize survives techmap, abc, \code{opt\_clean}}};
+\node[blk,minimum width=30mm] (aig) at (100,-13) {\code{synth -flatten}\\\code{abc -liberty} $\to$ AIG};
+\node[mblk,minimum width=26mm] (mb) at (141,11) {\code{MacroKind::}\\\code{from\_celltype}};
+\node[blk,minimum width=26mm] (chk) at (141,-13) {\code{check\_macros.sh}\\{\scriptsize presence / absence}};
+\draw[ar] (cell)--(isx);
+\draw[ar] (isx)-- node[lbl,left,pos=0.55]{yes} (norm);
+\draw[ar] (norm.east) -| (isg.north);
+\draw[ar] (isx)-- node[lbl,below]{no} (isg);
+\draw[ar] (isg.north east) -- node[lbl,above,sloped,pos=0.6]{yes} (bb.west);
+\draw[ar] (isg.south east) -- node[lbl,below,sloped,pos=0.6]{no} (aig.west);
+\draw[ar] (bb)--(mb); \draw[ar] (aig)--(chk); \draw[ar] (mb)--(chk);
+\end{tikzpicture}
+\caption{Interception. Anything Xilinx-shaped is first normalised to the three
+canonical cells, whose port names and widths stay frozen --- so a hidden benchmark
+with a different port surface changes one file and nothing else. Everything not
+matched takes the ordinary AIG path.}
+\label{fig:intercept}
+\end{figure}
+
+\textbf{Why the macros survive.} \I{} Two mechanisms, both necessary: a blackbox has
+no body, so \code{synth -flatten} cannot inline it and \code{abc -liberty} treats the
+instance as a cone boundary exactly like a DFF; and \code{setattr -set keep 1}
+prevents \code{opt\_clean -purge} from sweeping it as dead logic.
+
+\textbf{A falsifiable baseline.} \V{} \code{synth/run\_synth.sh} builds \emph{both}
+flows from identical RTL, and \code{check\_macros.sh} asserts the opposite condition
+in each: macros \textbf{present} in the native \code{gatelevel.json}, \textbf{absent}
+in the shredded one, with a non-zero exit if a macro ever survives into the baseline.
+Without this the entire throughput comparison in \S\ref{sec:bench} could be void
+while still producing plausible numbers.
+
+\textbf{Mapping macro nodes into GEM.} \I{} \code{MacroKind::from\_celltype}
+(\code{src/aig.rs:393}) recognises the three cells during the netlist DFS, and
+establishes two properties relied on everywhere downstream. \emph{Topological order
+by construction:} the DFS resolves a macro's combinational fan-in before allocating
+its output aigpin, so a macro output is always above its inputs --- GEM's levelization
+assumes this. \emph{Ports addressed by canonical slot, not netlist iteration order:}
+\code{MacroBlock.in\_iv} is indexed by \code{MacroKind::input\_slot}, so \code{CARRY4}
+is always $S[0..3], DI[0..3], CIN, CYINIT$ regardless of the order Yosys emitted pins.
+\V{} Unit test \code{canonical\_order\_tests} asserts the Rust tables and
+\code{gem\_macros.v} agree: if a width moves in one place it must move in the other.
+
+\section{Modified DAG Levelization Equations}\label{sec:sched}
+
+Let $G=(V,E)$ be the AND-inverter graph after macro-preserving synthesis; each
+$v \in V$ is an \emph{aigpin}. Write $\mathrm{fanin}(v)$ for the AND-gate fan-in;
+$\mathcal{M}$ for the macro instances; $\mathrm{combin}(m)$ for the
+\emph{combinational} input pins of macro $m$ (\code{CARRY4}: $S,DI,CIN,CYINIT$;
+\code{SRLC32E}: $A[4{:}0]$; \code{DSP48E2}: $\emptyset$); $\mathcal{O}_c \subset V$
+for aigpins driven by a combinational macro output ($CO,O,Q,Q_{31}$); and
+$\mathcal{O}_s \subset V$ for aigpins driven by a clocked macro output ($P$).
+
+Two integer labels per node. They coincide everywhere except on $\mathcal{O}_c$, and
+that single point of divergence is the entire content of the heterogeneous schedule:
+$\mathrm{avail}(v)$ is the major stage in which $v$ may be \emph{read} by boolean
+logic, and $\mathrm{eval}(v)$ the major stage in which the producer of $v$ is
+\emph{executed}.
+
+\vspace{-2pt}
+\begin{align}
+\mathrm{avail}(v) &= 0, && v \text{ a primary input, DFF } Q,\ \text{SRAM read data, or } v \in \mathcal{O}_s\\
+\mathrm{avail}(v) &= \max_{u \in \mathrm{fanin}(v)} \mathrm{avail}(u), && v \text{ an AND gate}\\
+\mathrm{eval}(m) &= \max_{p \in \mathrm{combin}(m)}
+   \begin{cases} \mathrm{eval}(p) & p \in \mathcal{O}_c\\ \mathrm{avail}(p) & \text{otherwise}\end{cases}, && m \in \mathcal{M}\\
+\mathrm{avail}(v) &= \mathrm{eval}(m) + 1, && v \in \mathcal{O}_c \text{ driven by } m
+\end{align}
+
+\begin{figure}[h]\centering
+\begin{tikzpicture}[node distance=5mm]
+\node[blk] (n) {node $v$};
+\node[dec,right=7mm of n] (d1) {macro\\output?};
+\node[blk,below=7mm of d1] (and) {AND gate:\\$\mathrm{avail}=\max$ fan-in \;(P1)};
+\node[dec,right=22mm of d1] (d2) {clocked\\($P$)?};
+\node[gblk,above=7mm of d2] (clk) {$\mathrm{avail}=0$ --- level-0 leaf\\\emph{free} \;(P2)};
+\node[dec,right=24mm of d2] (d3) {driven by\\another macro?};
+\node[mblk,above=7mm of d3] (chain) {$\mathrm{eval}(m)=\mathrm{eval}(p)$\\same stage, \code{\_\_syncthreads} \;(P3)};
+\node[rblk,below=7mm of d3] (cross) {$\mathrm{avail}=\mathrm{eval}(m)+1$\\\textbf{one grid barrier} \;(P4)};
+\draw[ar] (n)--(d1);
+\draw[ar] (d1)-- node[lbl,right]{no} (and);
+\draw[ar] (d1)-- node[lbl,above]{yes} (d2);
+\draw[ar] (d2)-- node[lbl,right]{yes} (clk);
+\draw[ar] (d2)-- node[lbl,above]{no} (d3);
+\draw[ar] (d3)-- node[lbl,right]{yes} (chain);
+\draw[ar] (d3)-- node[lbl,right]{no} (cross);
+\end{tikzpicture}
+\caption{How a node acquires its labels. Three of the four paths are free; only the
+last --- a combinational macro result crossing into the AND-gate domain --- costs a
+major stage, and it is charged exactly once.}
+\label{fig:labels}
+\end{figure}
+
+\textbf{(P1) Boolean depth is free.} Eq.~(2) takes a maximum, never an increment: an
+arbitrarily deep cone of AND gates evaluates inside one major stage, exactly as in
+stock GEM. The boomerang hierarchy is untouched.
+
+\textbf{(P2) Clocked macro outputs cost nothing.} By eq.~(1), $\mathcal{O}_s$ is a
+level-0 leaf. A DSP's $P$ is read from global state like a DFF's $Q$: what a reader
+observes this cycle is last cycle's commit, which is the correct register semantics
+and requires no boundary.
+
+\textbf{(P3) Macro-to-macro chaining costs nothing.} The case split in eq.~(3) takes
+\emph{eval}, not \emph{avail}, of an operand that is itself a combinational macro
+output. Hence a \code{CARRY4} chain of any length --- $CO[3]\!\to\!CIN$, the
+dependency the problem statement names explicitly --- resolves inside a single major
+stage, ordered by one batch per chain link separated by \code{\_\_syncthreads()}.
+Without this case split a 64-bit carry-chain adder would demand 16 major stages.
+
+\textbf{(P4) Only macro-to-boolean pays.} The $+1$ in eq.~(4) is charged once, and
+only where a combinational macro result must cross into the AND-gate domain --- the
+minimum price consistent with the buffer separation described above.
+
+\textbf{Stage construction.} With $D = \max_v \mathrm{eval}(v)$ over endpoints, major
+stage $j \in [0,D]$ is defined by
+\begin{align}
+\mathrm{endpoints}(j) &= \{e : \textstyle\max_{p \in \mathrm{inputs}(e)} \mathrm{avail}(p) = j\}\\
+\mathrm{macros}(j) &= \{m \in \mathcal{M} : \mathrm{eval}(m) = j\}\\
+\mathrm{forward}(j) &= \{v : \mathrm{eval}(v) \le j \;\wedge\; \exists\, c \in \mathrm{consumers}(v),\ \mathrm{eval}(c) > j\}
+\end{align}
+The second clause of $\mathrm{forward}(j)$ is the subtle one: a node with
+$\mathrm{eval}(v)=j$ but $\mathrm{avail}(v)=j{+}1$ --- a combinational macro output
+produced by stage $j$'s macro phase --- must be forwarded even though it is not
+readable in the stage that produces it.
+
+\textbf{Regression guarantee.} \I{} If $\mathcal{O}_c = \emptyset$ then $D=0$ by
+construction and a macro-free netlist is scheduled bit-identically to stock GEM.
+This is what makes the baseline comparison in \S\ref{sec:bench} meaningful rather
+than circular, and it is asserted by unit test
+\code{nothing\_but\_a\_combinational\_macro\_can\_raise\_a\_stage}.
+
+\textbf{Measured instantiation.} \M{} On \code{bench/macro\_bench.sv} at
+$\mathrm{LANES}=16$ --- 16 \code{DSP48E2}, 64 \code{CARRY4} in 16 four-block chains,
+16 \code{SRLC32E}, 96 macros in all --- the equations yield $D=1$, and the 64 chained
+\code{CARRY4}s occupy \emph{four batches within one major stage} rather than four
+stages:
+
+\begin{center}\small
+\begin{tabular}{clrr}
 \toprule
 Major stage & Contents & Partitions & Macro batches\\
 \midrule
-0 & 16 DSP48E2 (endpoint), 64 CARRY4, 16 SRLC32E & 2 & 5\\
+0 & 16 \code{DSP48E2} (endpoint), 64 \code{CARRY4}, 16 \code{SRLC32E} & 2 & 5\\
 1 & boolean cones consuming macro results & 1 & 0\\
 \bottomrule
 \end{tabular}
 \end{center}
 
-This is (P3) doing the work it exists for. Ordering within a chain is enforced
-by \texttt{\_\_syncthreads()} between batches, which is free; only the
-macro$\to$boolean edge costs a \texttt{this\_grid().sync()}. Had chaining been
-charged a major stage per link, this design would have needed five instead of
-two, and \S\ref{sec:results} shows that each additional major stage costs
-$\approx 31\,\mu$s per simulated cycle --- so (P3) is worth roughly
-$93\,\mu$s/cycle on a design this shape.
+This is (P3) doing the work it exists for. Had chaining been charged a major stage
+per link, this design would have needed five stages instead of two, and
+\S\ref{sec:bench} shows each additional major stage costs $\approx 31\,\mu$s per
+simulated cycle --- so (P3) is worth roughly $93\,\mu$s/cycle on a design this shape.
 
-%======================================================================
-\section{VRAM Layout Architecture}
-\label{sec:vram}
-%======================================================================
+\begin{figure}[h]\centering
+\begin{tikzpicture}[x=1mm,y=1mm]
+\node[blk,minimum width=17mm] (b0) at (0,0) {boolean\\stages};
+\node[gblk,minimum width=4mm,font=\tiny,rotate=90] (s1) at (11,0) {sync};
+\node[mblk,minimum width=15mm] (c0) at (24,0) {\code{CARRY4}\\blk 0};
+\node[gblk,minimum width=4mm,font=\tiny,rotate=90] (s2) at (35,0) {sync};
+\node[mblk,minimum width=10mm] (c1) at (44,0) {blk 1};
+\node[gblk,minimum width=4mm,font=\tiny,rotate=90] (s3) at (53,0) {sync};
+\node[mblk,minimum width=10mm] (c2) at (62,0) {blk 2};
+\node[gblk,minimum width=4mm,font=\tiny,rotate=90] (s4) at (71,0) {sync};
+\node[mblk,minimum width=10mm] (c3) at (80,0) {blk 3};
+\node[rblk,minimum width=5mm,font=\tiny,rotate=90] (g) at (89,0) {grid};
+\node[blk,minimum width=17mm] (b1) at (103,0) {boolean\\consumers};
+\node[lbl] at (14,8) {MAJOR STAGE 0};
+\node[lbl] at (100,8) {STAGE 1};
+\draw[decorate,decoration={brace,amplitude=3pt,mirror},draw=note] (16,-7) -- (85,-7);
+\node[lbl,text width=62mm,align=center] at (48,-12)
+  {4 chain links, \code{\_\_syncthreads()} between --- free by (P3)};
+\draw[ar,draw=rline] (89,-9) -- (89,-6.5);
+\node[lbl,text=rline,align=center] at (100,-13) {\code{this\_grid().sync()}\\$31$--$38\,\mu$s/cycle --- (P4)};
+\end{tikzpicture}
+\caption{One simulated cycle. Chaining is ordered by block-level fences, which cost
+nothing measurable; only the macro$\to$boolean edge forces a grid-wide barrier.}
+\label{fig:cycle}
+\end{figure}
 
-\subsection{Two disjoint regions}
+\section{VRAM Layout Architecture}\label{sec:vram}
 
-Macro state is split by lifetime, not by macro:
+The organising principle is \emph{lifetime}, not macro identity. A value that must
+survive to the next simulated cycle goes to global memory; a value consumed within
+the cycle that produced it never leaves shared memory; the arithmetic itself happens
+in registers, where nothing is addressable at all.
 
-\begin{enumerate}
-  \item \textbf{Bit-addressed outputs} live in the partition's write-out block,
-        interleaved with ordinary boolean write-outs so that the existing
-        commit path carries them to global state with no separate store.
-  \item \textbf{Word-addressed internal state} --- a DSP's $PREG$, an SRLC32E's
-        32-bit shift register --- lives in a dedicated
-        \texttt{UVec<u64>} region, \texttt{macro\_word\_state}.
-\end{enumerate}
+\begin{figure}[h]\centering
+\begin{tikzpicture}[x=1mm,y=1mm]
+\node[lbl] at (0,13) {FPGA PRIMITIVE};
+\node[blk,minimum width=24mm] (dsp) at (0,6) {\code{DSP48E2}\\{\scriptsize$P[47{:}0]$ clocked}};
+\node[blk,minimum width=24mm] (srl) at (0,-4) {\code{SRLC32E}\\{\scriptsize 32-bit SR}};
+\node[blk,minimum width=24mm] (c4)  at (0,-14) {\code{CARRY4}\\{\scriptsize stateless}};
+\node[lbl] at (42,13) {GLOBAL (VRAM)};
+\node[blk,minimum width=34mm] (gw)  at (42,6) {macro word state\\{\scriptsize\code{u64}, warp-padded per kind}};
+\node[blk,minimum width=34mm] (gio) at (42,-4) {input / output state\\{\scriptsize DFF $Q$, primary I/O}};
+\node[blk,minimum width=34mm] (gs)  at (42,-14) {instruction script\\{\scriptsize re-read every cycle}};
+\node[lbl] at (92,13) {SHARED (per SM)};
+\node[mblk,minimum width=32mm] (sw) at (92,6) {\code{shared\_writeouts}\\{\scriptsize the macro block lives here}};
+\node[mblk,minimum width=32mm] (ss) at (92,-9) {\code{shared\_state}\\{\scriptsize boomerang tree, 8192 bits}};
+\node[lbl] at (136,13) {REGISTERS};
+\node[gblk,minimum width=24mm] (r1) at (136,6) {gathered operands\\{\scriptsize \code{int64} arithmetic}};
+\node[gblk,minimum width=24mm] (r2) at (136,-9) {86 regs/thread\\{\scriptsize \textbf{0 spill}}};
+\draw[ar] (dsp)--(gw);
+\draw[ar] (srl.east) -- ++(4mm,0) |- (gw.west);
+\draw[ar] (c4.east) -- ++(8mm,0) -- ++(0,20mm) -| (sw.south west);
+\draw[ar] (gw)-- node[lbl,above]{read / commit} (sw);
+\draw[ar] (sw)-- node[lbl,above]{gather} (r1);
+\draw[ar] (gs)-- node[lbl,above]{descriptors} (ss);
+\draw[ar] (ss)--(r2);
+\draw[ar] (r1)-- node[lbl,right]{scatter} (r2);
+\end{tikzpicture}
+\caption{Where each primitive's state and operands physically live. Split by
+lifetime: state that survives the cycle is global, values consumed within it stay
+shared, arithmetic happens in registers. A \code{CARRY4} is stateless and therefore
+never touches global memory at all.}
+\label{fig:mem}
+\end{figure}
 
-\subsection{Write-out block ordering}
+\textbf{Two disjoint regions.} \I{} \emph{Bit-addressed outputs} live in the
+partition's write-out block, interleaved with ordinary boolean write-outs so the
+existing commit path carries them to global state with no separate store.
+\emph{Word-addressed internal state} --- a DSP's $PREG$, an SRLC32E's 32-bit shift
+register --- lives in a dedicated \code{UVec<u64>} region, \code{macro\_word\_state}.
 
-Within a partition the write-out region is ordered
+\begin{figure}[h]\centering
+\begin{tikzpicture}[x=1mm,y=1mm]
+\node[blk,minimum width=32mm,minimum height=6mm] (n) at (0,0) {normal $n_w$};
+\node[mblk,minimum width=24mm,minimum height=6mm,right=0.6mm of n] (m) {macro $n_m$};
+\node[gblk,minimum width=22mm,minimum height=6mm,right=0.6mm of m] (d) {duplicate $n_d$};
+\node[blk,minimum width=16mm,minimum height=6mm,right=0.6mm of d] (s) {SRAM $n_s$};
+\draw[ar,draw=gline] ($(d.south)+(0,-7mm)$) -- (d.south);
+\node[lbl,text=gline,align=center] at ($(d.south)+(0,-10mm)$)
+  {kernel derives the duplicate base as \code{shared\_writeouts}$[n_{io}-n_s-n_d+i]$,\\
+   subtracting from the \emph{top} --- so the macro block must sit \emph{below} the duplicates};
+\end{tikzpicture}
+\caption{Write-out region ordering. SRAM stays last so its pre-existing offset
+arithmetic is untouched; the macro block sits below the duplicates because the kernel
+locates duplicates by subtracting from the top of the region. This is a correctness
+requirement, not a layout preference.}
+\label{fig:order}
+\end{figure}
 
-\[
-\underbrace{\text{normal}}_{n_w}
-\;\Vert\;
-\underbrace{\text{macro}}_{n_m}
-\;\Vert\;
-\underbrace{\text{duplicate}}_{n_d}
-\;\Vert\;
-\underbrace{\text{SRAM}}_{n_s}
-\]
+\textbf{Slot allocation.} Macro instance $i$ receives
+$n_{\mathrm{slots}}(i) = \lceil |\mathrm{outputs}(i)| / 32 \rceil$ contiguous
+\code{u32} slots, so bit $b$ lands at global state bit
+$32\cdot \mathrm{macro\_start}_i + b$. Two consequences fall out of the allocation
+rather than from a convention: every macro's output field is contiguous and 32-bit
+aligned, and because each macro owns whole words, no two macros can contend for the
+same \code{u32} --- so the device-side result scatter is a plain read-modify-write
+requiring \textbf{no atomics}.
 
-with SRAM deliberately last so its pre-existing offset arithmetic is untouched
-and --- less obviously --- with the macro block \emph{below} the duplicates
-rather than between them and the SRAMs. That ordering is a correctness
-requirement rather than a layout preference; \S\ref{sec:dup-defect} gives the
-defect that established it.
+\textbf{Alignment.} \I{} The word-state region is a \code{UVec<u64>}: the element type
+supplies 8-byte alignment and \code{cudaMalloc} a 256-byte aligned base, so the
+problem statement's 64-bit alignment requirement holds \emph{structurally} rather
+than by runtime assertion. Instances are grouped by kind and each kind begins on a
+warp boundary, so a type-homogeneous batch reads a contiguous, segment-aligned span
+--- the condition for coalesced access.
 
-Macro instance $i$ receives
+\textbf{Script-side indirection.} A batch record references macros by index into the
+layout's slot table rather than inlining descriptors (a DSP descriptor alone is 176
+words; inlining would dwarf the script it lives in): \code{[stage index | kind code |
+count | count $\times$ slot index]}. \M{} Measured effect on \code{macro\_smoke}: the
+macro-preserving script is \textbf{69,652} words against the baseline's
+\textbf{94,720} --- a $26\,\%$ reduction, the direct instruction-memory dividend of
+not shredding. \M{} Layout totals: 7 instances, $64\times$\code{u64} $=512$ bytes of
+word state, 458 descriptor words, 9 macro write-out slots.
 
-\[
-n_{\text{slots}}(i) = \left\lceil \frac{|\text{outputs}(i)|}{32} \right\rceil
-\quad\text{contiguous \texttt{u32} slots,}
-\]
+\section{CUDA Execution Engine}\label{sec:cuda}
 
-so bit $b$ of that macro lands at global state bit
-$32 \cdot \text{macro\_start}_i + b$. Two consequences fall out of the
-allocation rather than from a convention: every macro's output field is
-contiguous, and its base is 32-bit aligned. Because each macro owns whole
-words, no two macros can contend for the same \texttt{u32}, and the device-side
-result scatter is a plain read-modify-write requiring \emph{no atomics}.
+\I{} \code{csrc/kernel\_v1\_impl.cuh:305--437}. The macro phase runs \emph{after} the
+boolean write-outs have settled in \code{shared\_writeouts} and \emph{before} they are
+committed to \code{output\_state}. A macro therefore reads its operands from what
+this partition has just produced and drops its results into the same write-out block;
+the existing commit path carries them out, the clock-enable machinery applies
+unchanged, and the boomerang reduction tree is not modified.
 
-\subsection{Word-state region and 64-bit alignment}
+\begin{figure}[h]\centering
+\begin{tikzpicture}[node distance=4.5mm]
+\node[blk] (a) {boomerang stages\\{\scriptsize \code{\_\_shfl\_down\_sync} reduction}};
+\node[gblk,right=of a] (b) {\code{\_\_syncthreads()}};
+\node[mblk,right=of b] (c) {load \code{num\_macro\_batches}\\{\scriptsize \code{shared\_metadata[8]}}};
+\node[mblk,below=7mm of c] (d) {for each batch:\\{\scriptsize CSR descriptor lookup}};
+\node[mblk,left=of d] (e) {gather operands\\{\scriptsize \code{GEM\_RD\_BIT}, sentinels}};
+\node[gblk,left=of e] (f) {dispatch by kind\\{\scriptsize \code{gem\_dsp48e2} / \code{gem\_carry4} / \code{gem\_srlc32e}}};
+\node[mblk,below=7mm of f] (g) {scatter result\\{\scriptsize read-modify-write, no atomics}};
+\node[gblk,right=of g] (h) {\code{\_\_syncthreads()}\\{\scriptsize orders next chain link}};
+\node[blk,right=of h] (i) {commit write-outs\\{\scriptsize $\to$ \code{output\_state}}};
+\node[rblk,right=of i] (j) {\code{this\_grid().sync()}\\{\scriptsize next major stage}};
+\draw[ar] (a)--(b); \draw[ar] (b)--(c); \draw[ar] (c)--(d); \draw[ar] (d)--(e);
+\draw[ar] (e)--(f); \draw[ar] (f)--(g); \draw[ar] (g)--(h);
+\draw[ar] (h.north) -- ++(0,4mm) -| node[lbl,above,pos=0.25]{more batches} (d.south);
+\draw[ar] (h)--(i); \draw[ar] (i)--(j);
+\end{tikzpicture}
+\caption{The macro phase inside one partition, per simulated cycle. Batches are
+type-homogeneous, so every active lane in a batch takes the same \code{switch} arm and
+the warp does not diverge across kinds.}
+\label{fig:kernel}
+\end{figure}
 
-\[
-\text{state\_words}(k) =
-\begin{cases}
-1 & k = \text{DSP48E2} \quad (P[47{:}0])\\
-1 & k = \text{SRLC32E} \quad (32\text{-bit SR})\\
-0 & k = \text{CARRY4} \quad (\text{stateless})
-\end{cases}
-\]
-
-The region is declared as \texttt{UVec<u64>}. The element type supplies 8-byte
-alignment and \texttt{cudaMalloc} supplies a 256-byte aligned base, so the
-problem statement's 64-bit alignment requirement holds \emph{structurally}
-rather than by runtime assertion. Instances are grouped by kind and each kind
-begins on a warp boundary, so a type-homogeneous batch reads a contiguous,
-segment-aligned span --- the condition for coalesced access.
-
-\paragraph{Measured layout (\texttt{macro\_smoke}).}
-
-\begin{center}
-\begin{tabular}{lr}
+\begin{center}\footnotesize
+\begin{tabular}{@{}p{0.17\textwidth}p{0.24\textwidth}p{0.28\textwidth}p{0.24\textwidth}@{}}
 \toprule
-Quantity & Value\\
+Mechanism & Where & Purpose & Measured consequence\\
 \midrule
-Macro instances & 7\\
-Word-state region & 64 $\times$ \texttt{u64} = \textbf{512 bytes}\\
-Alignment & 64-bit (verified)\\
-Descriptor words & 458\\
-Macro write-out slots & 9 \; (2 DSP $\times$ 2, 4 CARRY4 $\times$ 1, 1 SRL $\times$ 1)\\
+\code{\_\_shfl\_down\_sync} & 5 sites: boomerang reduction, SRAM gather & warp-scope reduction of the 13-level tree & \M{} preserved in both configurations\\
+\code{\_\_syncthreads()} & between macro batches, around the phase & order a chained macro against its producer & \M{} below profiler noise\\
+Shared memory & \code{shared\_writeouts} & macro operands and results, no global round-trip & \M{} 3,328 B/block; not the occupancy limiter\\
+Registers & gathered operands, \code{int64} arithmetic & native word-level ALU work & \M{} 86 regs, \textbf{0 spill}\\
+\code{this\_grid().sync()} & between major stages & make a macro result visible to boolean logic & \M{} $37.75\,\mu$s/cycle --- dominant cost\\
 \bottomrule
 \end{tabular}
 \end{center}
 
-The 458-word descriptor total decomposes exactly as
-$2(5{+}123{+}48) + (5{+}7{+}2) + 4(5{+}10{+}8) = 352 + 14 + 92 = 458$,
-where each descriptor carries a 5-word header followed by input and output bit
-positions. The exact agreement is used as a host-side structural check.
+\textbf{Why block scope, not warp scope, for the macro fence.} \I{} The macro phase
+deliberately does not use a warp shuffle for its own ordering, and this is a scope
+argument rather than an omission. Within a batch, macros are mutually independent by
+construction --- \code{pe.rs} computes \code{ready} against \code{realized\_inputs}
+\emph{before} updating it, so a chained consumer cannot share a batch with its
+producer. The ordering requirement is therefore \emph{between} batches, and \M{} a
+batch can exceed 32 macros (64 \code{CARRY4} in one partition at 16 lanes), so the
+fence must be block-scope; a warp shuffle cannot express it. GEM's own warp-level
+primitives are preserved unchanged at all five sites where they already existed.
 
-\subsection{Script-side indirection}
+\textbf{Occupancy and registers.} \M{} Measured with \code{cuobjdump -res-usage} on
+the shipped \code{sm\_86} binary: 86 and 105 registers/thread across the two compiled
+variants, \textbf{0 bytes} stack and local memory in both, 3,328 B shared, 2 blocks/SM
+either way --- a cooperative grid ceiling of $2\times 20 = 40$ blocks, which is exactly
+the \code{num\_blocks} used. \code{-maxrregcount} \emph{caps} allocation rather than
+permitting growth, so additional pressure would spill silently instead of failing to
+launch; the local-memory counter reading zero is what proves it did not.
 
-A batch record in the block script references macros by index into the layout's
-slot table rather than inlining descriptors:
+\section{Hardware Macro Implementations}\label{sec:macros}
 
-\begin{lstlisting}
-32-bit boomerang stage index this batch runs AFTER
-32-bit macro kind code
-32-bit count
-count x 32-bit slot index into the descriptor CSR
-\end{lstlisting}
+\I{} All three live in \code{csrc/macros.cuh}, compiled with
+\code{\_\_host\_\_ \_\_device\_\_ \_\_forceinline\_\_}, so one source serves the CPU
+executor and the GPU kernel and the two models cannot drift apart.
 
-A DSP descriptor alone is 176 words; inlining would dwarf the script it lives
-in. Measured effect on \texttt{macro\_smoke}: the macro-preserving script is
-\textbf{69{,}652 words} against the shredded baseline's \textbf{94{,}720} --- a
-26\,\% reduction, the direct instruction-memory dividend of not shredding.
+\begin{figure}[h]\centering
+\begin{tikzpicture}[x=1mm,y=1mm]
+\node[blk,minimum width=14mm] (a) at (0,4)  {$A$ \;27 s};
+\node[blk,minimum width=14mm] (d) at (0,-6) {$D$ \;27 s};
+\node[mblk,minimum width=24mm] (pre) at (28,-1) {pre-adder\\{\scriptsize $AD=A{+}D$ \;or\; $A$}};
+\node[blk,minimum width=14mm] (b) at (28,-21) {$B$ \;18 s};
+\node[mblk,minimum width=24mm] (mul) at (62,-1) {multiplier\\{\scriptsize $M=AD\cdot B$, \;45 b}};
+\node[blk,minimum width=14mm] (c) at (62,-21) {$C$ \;48 s};
+\node[mblk,minimum width=24mm] (alu) at (96,-1) {48-bit ALU\\{\scriptsize MODE mux}};
+\node[gblk,minimum width=24mm] (p) at (130,-1) {\textbf{PREG}\\{\scriptsize clocked, one \code{u64}}};
+\node[lbl,align=left] at (131,11) {MODE 0: $P\!\leftarrow\!C$\\MODE 1: $P\!\leftarrow\!M$\\MODE 2: $P\!\leftarrow\!P{+}M$};
+\node[lbl,align=center,text width=26mm] at (28,-10) {\code{USE\_PREADD};\\wraps at \textbf{27} bits};
+\draw[ar] (a.east) -- ++(4mm,0) |- (pre.west);
+\draw[ar] (d.east) -- ++(4mm,0) |- (pre.west);
+\draw[ar] (pre)--(mul);
+\draw[ar] (b.east) -- ++(6mm,0) |- (mul.south west);
+\draw[ar] (mul)--(alu);
+\draw[ar] (c.east) -- ++(6mm,0) |- (alu.south west);
+\draw[ar] (alu)--(p);
+\draw[ar] (p.south) -- ++(0,-8mm) -| node[lbl,below,pos=0.25]{accumulate} (alu.south);
+\end{tikzpicture}
+\caption{\code{DSP48E2} subset. All input and internal registers are combinational per
+the problem statement; only $P$ is clocked, one \code{u64} of state per instance, and
+$P$ commits solely when the traced clock enable is high.}
+\label{fig:dsp}
+\end{figure}
 
-%======================================================================
-\section{Occupancy and Resource Profile}
-\label{sec:occupancy}
-\label{sec:occ}
-%======================================================================
+\textbf{DSP48E2.} \I{} $AD = (A+D) \bmod 2^{27}$ signed, $M = AD \times B$ (45 bits),
+then $P_{\text{next}} \in \{C, M, P_{\text{cur}}+M\}$ by \code{MODE}, truncated to 48
+bits. The pre-adder width is the subtle case and has its own directed vectors:
+$A=D=2^{26}-1$ sums to $2^{27}-2$, which is $-2$ once the 27-bit pre-adder truncates.
+\V{} 1,648 vectors --- 12 directed (signed extremes, both pre-adder paths, all three
+modes, the wrap case) plus 400 random, each accumulated over 4 cycles so PREG feedback
+and 48-bit wrap are exercised.
 
-Measured with \texttt{cuobjdump -res-usage} on the shipped \texttt{sm\_86}
-binary, and with a device query for the machine parameters.
+\begin{figure}[h]\centering
+\begin{tikzpicture}[x=1mm,y=1mm]
+\node[lbl,align=center] at (-21,4) {$C_0 =$\\$CYINIT \,|\, CIN$};
+\foreach \i in {0,1,2,3} {
+  \pgfmathsetmacro\x{\i*30}
+  \pgfmathtruncatemacro\j{\i+1}
+  \node[mblk,minimum width=21mm] (m\i) at (\x,4) {stage \i\\{\scriptsize $S_\i,\ DI_\i \ \to\ C_{\j}$}};
+  \node[blk,minimum width=21mm] (o\i) at (\x,-9) {{\scriptsize $O_\i=S_\i\oplus C_\i$}\\{\scriptsize $CO_\i=C_{\j}$}};
+  \draw[ar] (m\i)--(o\i);
+}
+\draw[ar] (-21,-1)|-(m0.west);
+\draw[ar] (m0)-- node[lbl,above]{$C_1$} (m1);
+\draw[ar] (m1)-- node[lbl,above]{$C_2$} (m2);
+\draw[ar] (m2)-- node[lbl,above]{$C_3$} (m3);
+\draw[ar] (m3.east) -- ++(6mm,0) node[lbl,right,align=left]{$CO[3]\!\to\! CIN$\\next block};
+\end{tikzpicture}
+\caption{\code{CARRY4}, transcribed directly from the problem statement:
+$C_{i+1} = (S_i \wedge C_i) \vee (\neg S_i \wedge DI_i)$, with
+$O_i = S_i \oplus C_i$ and $CO_i = C_{i+1}$. Stateless; the eight output bits are
+packed as $CO \,|\, (O \ll 4)$ into one \code{u32} write-out slot.
+\V{} Verified \textbf{exhaustively} over all 1,024 input combinations.}
+\label{fig:c4}
+\end{figure}
 
-\begin{center}
-\begin{tabular}{lr}
+\textbf{SRLC32E.} \I{} Inputs $D$, $CE$, $A[4{:}0]$; state is a 32-bit shift register in
+one \code{u64} slot. Combinational read $Q = SR[A]$, $Q_{31} = SR[31]$; on the edge, if
+$CE$ then $SR \leftarrow (SR \ll 1) \,|\, D$. The ordering is GEM's read-old /
+commit-new discipline, exactly as the DFF path does it:
+\code{gem\_srlc32e\_read} is called \emph{before} \code{gem\_srlc32e\_edge} within a
+cycle, so a reader sees the pre-shift state. \V{} 11,520 read vectors (60 random start
+states $\times$ 6 shift steps $\times$ all 32 addresses --- every address exercised at
+every step) plus 360 edge vectors.
+
+\begin{center}\small
+\begin{tabular}{lrll}
 \toprule
-\multicolumn{2}{c}{\textbf{Kernel} \texttt{simulate\_v1\_noninteractive\_simple\_scan}}\\
+Primitive & Vectors & Coverage & Result\\
 \midrule
-Registers / thread & \textbf{86} and \textbf{105} \; (ceiling 128)\\
-Stack frame & \textbf{0 bytes} (both variants)\\
-Local memory & \textbf{0 bytes} --- no spilling (both variants)\\
-Shared memory & 3{,}328 bytes\\
-Constant bank 0 & 440 / 408 bytes\\
+\code{CARRY4}   & 1,024  & \textbf{exhaustive} & \V{} 0 disagreements\\
+\code{DSP48E2}  & 1,648  & directed $+$ random, 4-cycle accumulate & \V{} 0 disagreements\\
+\code{SRLC32E}  & 11,880 & every address $\times$ every step & \V{} 0 disagreements\\
 \midrule
-\multicolumn{2}{c}{\textbf{Device} --- NVIDIA RTX 3050 6\,GB Laptop, \texttt{sm\_86}}\\
-\midrule
-Streaming multiprocessors & 20\\
-Registers per SM & 65{,}536\\
-Register allocation granularity & 256 per warp\\
-Blocks per SM at 86 reg/thread & 2\\
-Blocks per SM at 105 reg/thread & 2\\
-Cooperative grid ceiling & $2 \times 20 = \mathbf{40}$ blocks\\
-\texttt{num\_blocks} used & 40\\
+\textbf{Total}  & \textbf{14,552} & & \\
 \bottomrule
 \end{tabular}
 \end{center}
 
-The fatbin carries two compiled variants of the kernel, at 86 and 105 registers
-per thread. Which one the driver loads is not determined here, and it does not
-need to be: both round to the same occupancy. At 256 threads per block, a warp
-allocates $\lceil 86 \cdot 32 / 256 \rceil \cdot 256 = 2816$ registers, a block
-$8 \times 2816 = 22{,}528$, and $\lfloor 65536 / 22528 \rfloor = 2$ blocks per
-SM. The 105-register variant gives 2 as well. Every conclusion below is
-therefore insensitive to the choice.
+\I{} The comparison is cross-language and cross-implementation:
+\code{csrc/tests/dump\_vectors.cpp} emits results from the CUDA models;
+\code{csrc/tests/reference\_model.py} computes the same set independently from the
+problem-statement equations; \code{verify\_macros.sh} diffs them. The two share only
+the LCG that generates the random inputs.
 
-\paragraph{The 3-blocks/SM threshold, and how narrowly it is missed.}
-Three resident blocks would need $\lfloor 65536/3 \rfloor = 21{,}845$ registers
-per block, i.e.\ $2730$ per warp, which the 256-register granularity rounds down
-to $2560$ --- exactly $\mathbf{80}$ registers per thread. At 86 the kernel
-misses the threshold by six registers per thread, or $512$ registers per SM out
-of $65{,}536$: under one percent. Capping at
-\texttt{-maxrregcount=80} would raise the cooperative grid ceiling from 40 to
-$3 \times 20 = 60$ blocks, a fifty percent increase in resident parallelism.
+\section{Verification Methodology}\label{sec:verif}
 
-That lever is recorded rather than exercised, and \S\ref{sec:throughput}
-explains why it would change nothing on the present benchmark: at
-$\text{LANES}=16$ the macro-preserving flow produces three partitions, so it
-occupies at most two blocks. Raising a ceiling of 40 to 60 cannot help a
-workload that is using two. The measurement identifies the lever; a design with
-enough partitions to press against the ceiling is what would make it pay.
+No golden reference was supplied, so correctness rests on oracles that share no code
+with the thing they validate. The ladder below isolates one layer per rung, so a
+disagreement names the layer that caused it rather than merely reporting a wrong
+waveform.
 
-\subsection{Why the ceiling is a design boundary}
+\begin{figure}[h]\centering
+\begin{tikzpicture}[node distance=8mm]
+\node[gblk,minimum width=42mm] (gt) {\code{naive\_sim} --- netlist evaluated directly on CPU\\{\scriptsize no script, no partitioning, no boomerang: ground truth}};
+\node[blk,below left=11mm and 14mm of gt] (ns) {\code{naive\_sim}\\shredded netlist};
+\node[mblk,below=11mm of gt] (gpu) {\code{cuda\_test}\\compiled script, GPU};
+\node[blk,below right=11mm and 14mm of gt] (ft) {\code{flatten\_test}\\compiled script, CPU};
+\draw[ar,draw=gline] (gt) -- node[lbl,above,sloped]{\textbf{2} synthesis equivalence} (ns);
+\draw[ar] (gt) -- node[lbl,right]{\textbf{3} kernel} (gpu);
+\draw[ar] (gt) -- node[lbl,above,sloped]{\textbf{4} host compiler} (ft);
+\draw[ar] (ns) to[out=-40,in=200] node[lbl,below]{\textbf{1} boolean path} (gpu);
+\node[lbl,below=12mm of gpu,align=center]
+  {2 fails $\to$ synthesis \quad$\cdot$\quad 3 fails, 4 fails $\to$ host compiler
+   \quad$\cdot$\quad 3 fails, 4 passes $\to$ kernel};
+\end{tikzpicture}
+\caption{Rung 2 is the one no GPU-only comparison can supply: it establishes that both
+netlists are the same design before a GPU is involved. Rung 4 bisects rung 3, which
+is what made the remaining defects findable in seconds rather than through GPU
+round-trips.}
+\label{fig:ladder}
+\end{figure}
 
-\texttt{build.rs} pins \texttt{-maxrregcount=128}. At 256 threads per block this
-admits exactly 2 blocks/SM, giving a cooperative grid ceiling of 40 --- which is
-\emph{identical} to \texttt{usage.md}'s recommended $2 \times \text{SM count}$.
-There is no headroom: the advisory figure and the hardware limit are the same
-number.
-
-The occupancy consequence is therefore not a launch failure. Because
-\texttt{-maxrregcount} \emph{caps} allocation rather than permitting growth,
-additional register pressure in the macro phase does not fail to launch --- it
-\textbf{spills to local memory and silently loses throughput}. Launch success
-proves nothing about occupancy health. The metric that does is
-
-\begin{center}
-\texttt{l1tex\_\_t\_sectors\_pipe\_lsu\_mem\_local\_op\_ld.sum}
-\end{center}
-
-under Nsight Compute --- or, without profiling privileges,
-\texttt{cuobjdump -res-usage}, which reports the same fact statically as
-\texttt{LOCAL} and \texttt{STACK}. Both variants of the shipped kernel report
-\texttt{STACK:0 LOCAL:0}, so the macro phase is inside budget with 22 registers
-of headroom against the 128 cap. That margin is the reason the correctness
-fixes could be made without measuring occupancy after each one --- but it is
-not licence: richer DSP modes or chain fusion should be assumed to cross it and
-must be re-measured, not estimated.
-
-It is worth recording that this figure improved as a side effect of a
-correctness fix rather than a tuning pass. Moving the \texttt{data\_inv}
-correction ahead of the macro phase (\S\ref{sec:latent}) replaced two XOR
-operations with one and removed a value that had been live across the entire
-phase: registers fell from 125 to 86, still with no spilling.
-
-\paragraph{Design consequence.}
-This boundary is why the correctness fixes described in
-Section~\ref{sec:verif} were implemented \emph{host-side}, in the scheduler and
-memory formatter, rather than in \texttt{csrc/kernel\_v1\_impl.cuh}. Every one
-of them adds zero registers.
-
-%======================================================================
-\section{Dual-Oracle Verification Methodology}
-\label{sec:verif}
-%======================================================================
-
-The problem statement supplies no golden reference model. We therefore
-construct two independent oracles and apply each only where it has authority.
-The central discipline is that \textbf{an oracle must share no code with the
-thing it validates}.
-
-
-\subsection{The script alignment invariant}
-\label{sec:align}
-
-Injecting variable-length macro batches into GEM's VLIW-style script stream
-uncovered an undocumented structural constraint.
-
-The boomerang sections are not read word by word. They are fetched with vector
-loads:
-
-\begin{lstlisting}
-struct alignas(8)  VectorRead2 { u32 c1, c2; };
-struct alignas(16) VectorRead4 { u32 c1, c2, c3, c4; };
-t4_1.read(((const VectorRead4 *)(script + script_pi)) + threadIdx.x);
-\end{lstlisting}
-
-The cast to \texttt{VectorRead4*} requires \texttt{script\_pi} to be a multiple
-of four \texttt{u32} words. Stock GEM satisfies this without ever stating it:
-the metadata block is 256 words, each global-read round is $256 \times 2$, and
-each boomerang stage is $256 \times 4 \times 5$. Every constituent is a
-multiple of four, so the invariant holds by construction and no code asserts
-it.
-
-The macro section is the first variable-length element ever added to the
-stream. A batch record is $3 + \mathrm{count}$ words, so \emph{any batch with
-an even count breaks the alignment for every partition that follows it}:
-
-\begin{center}
-\begin{tabular}{lrrl}
+\begin{center}\small
+\begin{tabular}{@{}llrl@{}}
 \toprule
-Macro section contents & Batches & Words & $\equiv 0 \bmod 4$?\\
+Rung & What it isolates & Comparisons & Result\\
 \midrule
-4 CARRY4 + 1 SRLC32E, all $\mathrm{count}=1$ & 5 & 20 & yes\\
-\quad + 1 DSP48E2 batch, $\mathrm{count}=2$ & 6 & \textbf{25} & \textbf{no}\\
+Macro models & PS equations, C++ vs Python & 14,552 vectors & \V{} \textbf{Pass}\\
+\multicolumn{4}{@{}l}{\emph{\code{macro\_bench}, $\mathrm{LANES}=16$ --- 82 ports $\times$ 400 cycles}}\\
+1. Shredded GPU vs \code{naive\_sim}   & the ordinary boolean path      & 32,800 & \V{} \textbf{Pass}\\
+2. Design equivalence (CPU only)       & macro-preserving synthesis     & 32,800 & \V{} \textbf{Pass}\\
+3. Macro GPU vs \code{naive\_sim}      & the CUDA kernel                & 32,800 & \V{} \textbf{Pass}\\
+4. Compiled script vs \code{naive\_sim}& \code{pe.rs} / \code{flatten.rs} & 32,800 & \V{} \textbf{Pass}\\
+\multicolumn{4}{@{}l}{\emph{\code{macro\_smoke} regression --- 123 ports $\times$ 400 cycles}}\\
+2. Design equivalence (CPU only)       & macro-preserving synthesis     & 49,200 & \V{} \textbf{Pass}\\
+4. Compiled script vs \code{naive\_sim}& \code{pe.rs} / \code{flatten.rs} & 49,200 & \V{} \textbf{Pass}\\
 \bottomrule
 \end{tabular}
 \end{center}
 
-The failure mode is instructive. It is not a wrong answer and not an illegal
-address; it is \texttt{CUDA\_ERROR\_MISALIGNED\_ADDRESS}, raised at the
-cooperative launch's synchronisation point, naming neither the script nor the
-macro that caused it. It was identified by the distinction between
-\emph{misaligned} and \emph{illegal}: an illegal address would have implicated
-descriptor indexing, whereas misalignment can only come from a widened load.
-That the fault was identical at 2 blocks and at 40 excluded any block-count
-dependence.
+On \code{macro\_bench} the macro-preserving path evaluates 16 \code{DSP48E2}, 64
+\code{CARRY4} --- including 16 four-deep $CO[3]\!\to\!CIN$ chains --- and 16
+\code{SRLC32E} natively on the GPU ALU, and reproduces netlist-level ground truth at
+every port and every timestamp. One dependency in that design exists purely as a
+regression test: \code{flags[1] = (sum\_l > 17'd100)} is ordinary AND-gate logic
+consuming a word-level \code{CARRY4} result --- precisely the macro$\to$boolean edge
+the staging equations of \S\ref{sec:sched} exist to order. It is exercised sixteen
+times per cycle.
 
-The fix is host-side, in the script emitter, and costs no registers:
+\textbf{A structural invariant the work established.} \I{} GEM fetches boomerang
+script sections with widened vector loads (\code{VectorRead4}), which requires the
+section offset to be a multiple of four \code{u32} words. Stock GEM satisfies this
+without ever stating it, because every stock section length is a multiple of four. A
+macro batch record is $3 + \mathrm{count}$ words and is the first variable-length
+element ever added to the stream, so an even count breaks alignment for every
+partition that follows it. The emitter now pads to the widest load's alignment. We
+record the general rule: \emph{any variable-length section spliced into a GPU
+instruction stream consumed by widened loads must preserve the widest load's
+alignment}, asserted at emission rather than discovered at launch.
 
-\begin{lstlisting}
-while script.len() % 4 != 0 { script.push(0); }
-\end{lstlisting}
+\section{Benchmarking and Numerical Analysis}\label{sec:bench}
 
-We record this as a general design rule for the architecture: \textbf{any
-variable-length section spliced into a GPU instruction stream consumed by
-widened loads must preserve the widest load's alignment}, and that requirement
-should be asserted at emission rather than discovered at launch.
-
-\subsection{What each oracle can and cannot establish}
-
-The three oracles are not interchangeable, and the distinction is not academic
---- each has produced a false or incomplete verdict in this project.
-
-\begin{center}
-\begin{tabular}{p{3.1cm}p{5.0cm}p{5.4cm}}
-\toprule
-Oracle & Establishes & Cannot establish\\
-\midrule
-CPU reference\newline(\texttt{--check-with-cpu}) &
-\emph{Implementation fidelity}: the GPU kernel computes what GEM's own CPU
-model computes, from the same script &
-\emph{Design correctness}. Both sides consume the same mapped script, so a
-synthesis or mapping defect appears identically in both and passes\\[4pt]
-Shredded baseline VCD &
-\emph{Cross-implementation agreement}: the macro path and a macro-free path
-that shares no code with it agree &
-Correctness of the baseline itself. It inherits every synthesis and mapping
-defect of the shredded flow\\[4pt]
-Design-level Python testbench &
-\emph{Semantic correctness} against IEEE 1800--2012 SystemVerilog intent,
-independent of both flows &
-Nothing --- but only once calibrated against a known-good signal\\
-\bottomrule
-\end{tabular}
-\end{center}
-
-\subsection{Oracle 1 --- CPU reference, for the boolean path}
-
-GEM ships a CPU simulator, invoked with \texttt{--check-with-cpu}. It is a
-legitimate oracle for the shredded baseline, which contains only AND-inverter
-logic and flip-flops, and the baseline passes it. Its authority is bounded,
-however: it compares two implementations of the \emph{same script}, so it
-validates that the GPU is faithful to the CPU model, not that either is
-faithful to the RTL.
-
-It is \emph{not} an oracle for the macro path, and treating it as one produced
-the most instructive failure of this project. At one point the native run
-reported \texttt{sanity test passed} while every macro-driven output in the
-VCD was frozen at its initial value for all 2001 cycles. The CPU reference does
-not model macro semantics, so it agreed with the GPU about bits that neither
-was computing. Two errors cancelled, and a green result concealed a completely
-dead datapath.
-
-\subsection{Oracle 2 --- shredded-baseline VCD, for the macro path}
-
-The macro-preserving and shredded builds are the \emph{same RTL} driven by the
-\emph{same stimulus}. The shredded build is independently validated by
-Oracle 1. Their output waveforms must therefore agree at every timestamp on
-every port. Crucially, the shredded path exercises no macro code whatsoever:
-the two share no implementation, so agreement is evidence and not tautology.
-
-\texttt{bench/compare\_vcd.py} performs this comparison by port name (VCD
-identifier codes are per-file and meaningless across files), reporting ports
-present in only one file separately rather than silently ignoring them. The
-comparator itself is validated in both directions: it passes on identical input
-and detects a deliberate three-bit mutation.
-
-This oracle immediately localised what Oracle 1 had missed --- 110 of 123 ports
-differing, partitioned cleanly by macro kind --- and each subsequent fix moved
-a specific port group from differing to matching.
-
-\paragraph{Establishing that the baseline is trustworthy.}
-A cross-implementation oracle is only as good as the reference implementation,
-so the baseline was itself validated against a third, independent simulator:
-GEM's \texttt{naive\_sim}, which evaluates the gate-level netlist directly on
-the CPU with no script, no partitioning and no boomerang scheduling. It shares
-essentially no code with the GPU path.
-
-\begin{center}
-\begin{tabular}{lr}
-\toprule
-Comparison (400 cycles, 123 ports) & Ports differing\\
-\midrule
-\texttt{naive\_sim} vs shredded GPU & \textbf{0 / 123}\\
-\texttt{naive\_sim} vs macro-preserving GPU & 108 / 123\\
-\bottomrule
-\end{tabular}
-\end{center}
-
-The shredded GPU run is bit-exact against netlist-level ground truth on every
-port. The baseline is therefore sound, and a disagreement reported by Oracle 2
-is attributable to the macro path.
-
-\paragraph{A retracted inference, recorded deliberately.}
-An earlier draft of this report asserted that the baseline was defective on
-\texttt{sum[16]}, reasoning that the carry-out of a 16-bit addition cannot be
-constant under pseudo-random stimulus, whereas the shredded waveform records
-one value change in 2001 cycles. \texttt{naive\_sim} reproduces that same
-constant from the netlist. The netlist behaviour is what it is; the faulty step
-was reasoning from RTL intent \emph{across} a synthesis boundary that had not
-been verified. We record the retraction rather than silently deleting it,
-because it is the same class of error the methodology exists to catch: a
-confident inference that no measurement supported.
-
-\subsection{Oracle 3 --- design-level Python testbench}
-
-\texttt{bench/golden\_model.py} evaluates \texttt{macro\_smoke.sv}'s RTL
-semantics directly in Python from the same input VCD, sharing no code with
-either synthesis flow or with the simulator. It is the only oracle that
-validates against \emph{design intent} rather than against another
-implementation, and it is what attributes a disagreement to one side or the
-other.
-
-\paragraph{Status: authored, not yet calibrated.}
-The model does not currently reproduce \texttt{scratch}
-($\mathtt{cnt} \oplus \{x[3{:}0], y[3{:}0]\}$), a macro-free signal that
-Oracle 1 has already validated. A model that disagrees with a known-good
-signal is wrong about that signal, so its verdicts on the macro-driven ports
-are withheld. Calibration was attempted over input-sample offsets
-$\pm 2$ cycles, both nibble orderings, and all 256 counter phases; the best fit
-was 14 of 30 cycles, indistinguishable from chance. The mismatch is therefore
-structural --- in how GEM's cycle indexing maps onto the generated stimulus ---
-rather than a parameter to be swept. \textbf{Calibrating on \texttt{scratch} is
-the prerequisite for every remaining correctness claim in
-Section~\ref{sec:results}.}
-
-We state this rather than presenting an uncalibrated model as evidence: the
-methodological point of this section is that an unvalidated oracle is worse
-than none, and the same standard applies to our own.
-
-\subsection{Oracle 4 --- cross-language macro models}
-
-For the primitive models themselves (Deliverable C) the oracle is two
-independent transcriptions of the problem statement's equations, in C++
-(\texttt{csrc/macros.cuh}, compiled both as host code and as \texttt{\_\_device\_\_}
-code) and in Python (\texttt{csrc/tests/reference\_model.py}), diffed bit for
-bit over an identical vector set:
-
-\begin{center}
-\begin{tabular}{lr}
-\toprule
-CARRY4 & 1{,}024 cases --- \textbf{exhaustive} ($16\times16\times2\times2$)\\
-DSP48E2 & 1{,}648 cases (8 directed + 400 random $\times$ 4 accumulate cycles)\\
-SRLC32E & 11{,}520 reads + 360 clock edges\\
-\midrule
-Total & \textbf{14{,}552 vectors, 0 disagreements}\\
-\bottomrule
-\end{tabular}
-\end{center}
-
-Because the CUDA kernel and the host golden model compile from one source, a
-separate CPU reference cannot drift from the GPU path --- the verification
-argument rests on them being the same code, checked against a different-language
-restatement of the specification.
-
-%======================================================================
-\section{Results}
-\label{sec:results}
-%======================================================================
+All figures below: same GPU (RTX 3050 6\,GB Laptop, \code{sm\_86}, 20 SMs, 1,536\,KiB
+L2, 131.7\,GB/s peak), same stimulus, same \code{num\_blocks}$=40$, same 400 cycles,
+same binary, five repetitions per point, median reported. Timing is GEM's own
+\code{simulation} span, which brackets the kernel launches and excludes parsing,
+mapping and VCD writing.
 
 \subsection{Front-end: the cost of shredding}
 
-Identical RTL, two synthesis flows, on both benchmarks:
-
-\begin{center}
+\begin{center}\small
 \begin{tabular}{llrrrr}
 \toprule
 Design & Flow & AIG cells & DFFs & Macros & Partitions\\
 \midrule
-\texttt{macro\_smoke} & shredded & 9{,}922 & 133 & 0 & 1\\
-                      & preserved & \textbf{95} & 8 & 7 & 1\\
+\code{macro\_smoke} & shredded  & 9,922 & 133 & 0 & 1\\
+                    & preserved & \textbf{95} & 8 & 7 & 1\\
 \midrule
-\texttt{macro\_bench} & shredded & 85{,}444 & 1{,}600 & 0 & 6\\
-$\text{LANES}=16$     & preserved & \textbf{5{,}754} & 768 & 96 & $2 + 1$\\
+\code{macro\_bench} & shredded  & 85,444 & 1,600 & 0 & 6\\
+$\mathrm{LANES}=16$ & preserved & \textbf{5,754} & 768 & 96 & $2+1$\\
 \bottomrule
 \end{tabular}
 \end{center}
 
-$104\times$ and $14.8\times$ reductions in AIG cell count. That shredding a
-handful of word-level primitives inflates the graph by one to two orders of
-magnitude is the architectural claim, and these are the numbers behind it.
-
-The DFF counts move too, and for a reason worth naming: a DSP48E2's $P$
-register and an SRLC32E's shift register become \emph{macro word state} rather
-than boolean flip-flops, so they leave the boomerang's endpoint set entirely.
+\M{} $104\times$ and $14.8\times$ reductions in AIG cell count. That shredding a
+handful of word-level primitives inflates the graph by one to two orders of magnitude
+is the architectural claim of this problem statement, and these are the numbers behind
+it. The DFF counts move too, for a reason worth naming: a DSP's $P$ and an SRLC32E's
+shift register become \emph{macro word state} rather than boolean flip-flops, so they
+leave the boomerang's endpoint set entirely.
 
 \subsection{Throughput}
-\label{sec:throughput}
 
-\texttt{macro\_bench} at $\text{LANES}=16$. Same GPU, same stimulus, same
-\texttt{num\_blocks} $=40$, same 400 cycles, same binary; five repetitions per
-side, median reported. Timing is GEM's own \texttt{simulation} span, which
-brackets the kernel launches and excludes parsing, mapping and VCD writing.
-
-\begin{center}
-\begin{tabular}{lrrrr}
+\begin{center}\small
+\begin{tabular}{rrrcrrr}
 \toprule
-Configuration & Median & Cycles/s & Script/cycle & Per cycle\\
+Lanes & Shredded & Native & Ratio & Script (shred) & Script (native) & Reduction\\
 \midrule
-Shredded baseline & 18.65\,ms & \textbf{21{,}445} & 2{,}060.0\,KiB & 46.6\,$\mu$s\\
-Native macros     & 31.09\,ms & \textbf{12{,}866} &   454.5\,KiB & 77.7\,$\mu$s\\
-\midrule
-Ratio             & & $\mathbf{0.60\times}$ & $\mathbf{4.53\times}$ smaller & $+31.1\,\mu$s\\
+ 8 & 24,852 & 11,637 & $0.47\times$ & 1,336.0\,KiB & 292.3\,KiB & $4.57\times$\\
+16 & 22,426 & 13,657 & $\mathbf{0.61\times}$ & 2,060.0\,KiB & 454.5\,KiB & $4.53\times$\\
+32 & 17,991 & --- & --- & 3,830.0\,KiB & --- & ---\\
 \bottomrule
 \end{tabular}
 \end{center}
 
-\paragraph{The optimisation succeeds on its own metric and loses on wall clock.}
-GEM re-reads its entire instruction script from global memory on every
-simulated cycle, so script size is the per-cycle DRAM traffic floor and is
-exactly the quantity this work attacks. It fell $4.53\times$, from 527{,}360 to
-116{,}340 \texttt{u32} words. Runtime nevertheless rose by $31.1\,\mu$s per
-cycle. Both statements are measurements; neither is qualified.
+\noindent{\footnotesize Simulated cycles per second. The 32-lane native point is
+absent because a write-out budgeting defect blocked the mapping; the fix landed after
+this sweep and re-measurement was not performed in time.}
 
-\paragraph{Therefore the workload is not bandwidth-bound.}
-This is the load-bearing inference, and it is falsifiable rather than
-rhetorical. The native configuration reads $1.64$\,MB \emph{less} every cycle.
-Were the run limited by script bandwidth, its script-read component would have
-fallen to $22\,\%$ of the baseline's and total runtime would have fallen with
-it. It rose. Expressing the same data as achieved script-read rates makes the
-gap plain:
+Two things are visible immediately. The native path is \emph{flat} in lane count while
+the shredded path \emph{degrades}, and consequently the ratio climbs,
+$0.47 \to 0.61$. A single measurement could not have shown either.
 
-\begin{center}
-\begin{tabular}{lrrr}
-\toprule
-Configuration & Script traffic & Elapsed & Achieved rate\\
-\midrule
-Shredded baseline & 843.8\,MB & 18.65\,ms & 45.2\,GB/s\\
-Native macros     & 186.1\,MB & 31.09\,ms & \textbf{6.0\,GB/s}\\
-\bottomrule
-\end{tabular}
-\end{center}
+\subsection{The residency cliff: why $4.53\times$ smaller gives $1{,}173\times$ less traffic}
 
-At $6.0$\,GB/s the native path is nowhere near the memory system's limit. It is
-waiting on something else.
+\begin{figure}[h]\centering
+\begin{tikzpicture}[x=1mm,y=1mm]
+\draw[draw=rline,thin,dashed] (-4,26) -- (104,26);
+\node[lbl,text=rline,right] at (104,26) {L2 $=$ 1,536\,KiB};
+\fill[cbox,draw=cline] (10,0) rectangle (34,34.9);
+\node[font=\scriptsize,align=center] at (22,39) {shredded --- \textbf{2,060\,KiB}};
+\node[font=\tiny,align=center,text=cline!150] at (22,17)
+  {$1.34\times$ L2\\re-fetched from DRAM\\\emph{every cycle}\\\textbf{46.91\,\%} of peak};
+\fill[mbox,draw=mline] (66,0) rectangle (90,7.7);
+\node[font=\scriptsize,align=center] at (78,12) {native --- \textbf{454.5\,KiB}};
+\node[font=\tiny,align=center,text=mline] at (78,3.8) {$0.30\times$ L2};
+\node[font=\tiny,align=center,text=mline] at (78,-7)
+  {fetched \emph{once}, then cache-resident\\\textbf{0.04\,\%} of peak};
+\draw[ar,draw=note,thick] (37,32) to[out=-15,in=165] node[lbl,above,pos=0.5]{$4.53\times$ smaller} (63,10);
+\draw[<->,draw=note] (5,0) -- (5,34.9);
+\node[lbl,rotate=90] at (2,17) {script size};
+\end{tikzpicture}
+\vspace{5mm}
+\caption{Exactly one of the two scripts fits in L2, so the benefit is discontinuous
+and the mechanism is residency, not a linear bandwidth saving. The design target is
+therefore not ``a smaller script'' but ``a script below 1,536\,KiB''.}
+\label{fig:cliff}
+\end{figure}
 
-\paragraph{Two candidate causes, and they are separable.}
-\emph{(i) The additional major stage.} Macro-depth staging places boolean
-consumers of a macro result one major stage above their producer, so the native
-path executes two \texttt{this\_grid().sync()} per cycle against the baseline's
-one. A grid barrier of $\approx 31\,\mu$s is the right order for this part.
+\M{} Measured with \code{cudaGetDeviceProperties} rather than taken from a
+specification sheet. Two arithmetic checks confirm the reading:
 
-\emph{(ii) Partition-count collapse.} GEM's unit of parallelism is the
-\emph{partition}, and the front-end table above shows the native flow needs
-three where the baseline needs six --- and splits them across two sequential
-stages, so at most two blocks are resident at any instant. With
-$\texttt{num\_blocks}=40$ both configurations badly under-fill the device, but
-the native one under-fills it by a further factor of three.
-
-Cause (ii) is the more interesting of the two, because it is not an
-implementation defect but a structural tension in the approach:
-\textbf{fewer cells means fewer partitions means less parallelism.} The script
-saving is real, and it only pays once the design is large enough that both
-flows still produce many partitions. This reframes what a larger benchmark
-tests --- not whether the script shrinks, which is settled, but whether
-partition count survives the shrinking.
-
-Section~\ref{sec:profile} reports the Nsight Compute measurement that
-discriminates between (i) and (ii).
-
-\paragraph{What this result is not.}
-It is not evidence that native macro evaluation is a bad idea, and it is not a
-speedup. It is a measurement of where the crossover is not yet. The honest
-summary is that at $\text{LANES}=16$ on an RTX 3050 Laptop, the design is too
-small for a $4.53\times$ bandwidth saving to outweigh one extra grid barrier
-and a threefold loss of occupancy.
+\begin{itemize}
+\item \emph{The baseline's DRAM traffic is essentially all script.} Peak bandwidth is
+131.7\,GB/s, so Nsight's $46.91\,\%$ is 61.8\,GB/s; script re-reads alone account for
+$2{,}109{,}440\,\mathrm{B} \times 200 / 7.51\,\mathrm{ms} = 56.2$\,GB/s --- $91\,\%$ of
+everything measured. The instruction script is not a contributor to the bottleneck;
+it \emph{is} the bottleneck.
+\item \emph{The native script is fetched approximately once, not two hundred times.}
+At $0.04\,\%$ of peak over 15.06\,ms the total DRAM traffic is $\approx 0.8$\,MB,
+against a script of 0.465\,MB. Re-reading it every cycle would move 93\,MB.
+\end{itemize}
 
 \subsection{Kernel profile}
-\label{sec:profile}
 
-\begin{center}
-\begin{tabular}{lrr}
+Nsight Compute, 200 cycles, \code{num\_blocks}$=40$, \code{macro\_bench} at
+$\mathrm{LANES}=16$. \I{} The cooperative launch requires
+\code{--replay-mode application}: the default per-pass kernel replay re-executes the
+kernel in isolation, which a \code{this\_grid().sync()} cannot survive.
+
+\begin{center}\small
+\begin{tabular}{lrrl}
 \toprule
-Metric & Shredded & Native\\
+Metric & Shredded & Native & Reading\\
 \midrule
-\texttt{dram\_\_throughput} (\% of peak) & \PENDING & \PENDING\\
-\texttt{sm\_\_warps\_active} (\% of peak) & \PENDING & \PENDING\\
-\texttt{smsp\_\_thread\_inst\_executed} (of 32) & \PENDING & \PENDING\\
-Local memory / stack (static) & \textbf{0 / 0} & \textbf{0 / 0}\\
+\code{dram\_\_throughput} (\% peak)        & 46.91 & \textbf{0.04} & bandwidth-bound $\to$ not\\
+\code{sm\_\_warps\_active} (\% peak)       & 33.33 & 33.33 & occupancy identical\\
+\code{smsp\_\_thread\_inst\_executed}      & 28.91 & 19.78 & of 32; the divergence trade\\
+Local ld/st sectors                        & 0 & 0 & no spilling\\
+\code{gpu\_\_time\_duration} (200 cycles)  & 7.51\,ms & 15.06\,ms & $+37.75\,\mu$s/cycle\\
 \bottomrule
 \end{tabular}
 \end{center}
 
-The last row is measured and the other three are not, because Nsight Compute
-requires elevated access to the GPU performance counters
-(\texttt{ERR\_NVGPUCTRPERM}) which was unavailable on the measurement machine.
-The spill check does not depend on it: \texttt{cuobjdump -res-usage} reports
-\texttt{STACK} and \texttt{LOCAL} statically from the compiled binary, and both
-read zero (\S\ref{sec:occupancy}). That is the row on which the others depend,
-so the analysis in \S\ref{sec:throughput} stands.
+The warp-divergence row is the deliberate trade this architecture makes. The
+boomerang tree is perfectly uniform, so the baseline keeps 28.91 of 32 lanes busy per
+issued instruction; a macro batch activates one lane per macro, dropping the native
+path to 19.78. Idle arithmetic lanes are bought in exchange for memory traffic --- and
+the DRAM row shows the purchase was made in full.
 
-Three readings are decisive. A baseline \texttt{dram\_\_throughput} in single
-digits confirms directly that the workload was never bandwidth-bound at this
-scale, which is currently inferred from timing alone. A native
-\texttt{sm\_\_warps\_active} materially below the baseline's implicates
-cause~(ii) over cause~(i). And the local-memory counters must read \emph{zero}:
-\texttt{-maxrregcount} \emph{caps} registers rather than failing to launch, so
-excess pressure spills silently --- a successful launch proves nothing, and
-every conclusion in \S\ref{sec:throughput} is unsafe if these are non-zero.
+\subsection{Where the remaining time goes}
 
-\subsection{Verification status}
+The measurements decompose cleanly, and three of the four candidate causes are
+eliminated by measurement rather than by argument:
 
-All results below are measured on an RTX 3050 Laptop (\texttt{sm\_86}) with
-identical stimulus and identical \texttt{num\_blocks} on both sides.
-
-\begin{center}
-\begin{tabular}{lllr}
+\begin{center}\small
+\begin{tabular}{@{}lll@{}}
 \toprule
-Rung & What it isolates & Result & Comparisons\\
+Candidate cause & What we measured & Verdict\\
 \midrule
-Macro models & PS equations, C++ vs Python & \textbf{Pass} & 14{,}552 vectors\\
-\midrule
-\multicolumn{4}{l}{\emph{\texttt{macro\_bench}, $\text{LANES}=16$ --- 82 ports $\times$ 400 cycles}}\\
-1. Shredded GPU vs \texttt{naive\_sim} & the ordinary boolean path & \textbf{Pass} & 32{,}800\\
-2. Design equivalence (CPU only) & macro-preserving synthesis & \textbf{Pass} & 32{,}800\\
-3. Macro GPU vs \texttt{naive\_sim} & the CUDA kernel & \textbf{Pass} & 32{,}800\\
-4. Compiled script vs \texttt{naive\_sim} & \texttt{pe.rs} / \texttt{flatten.rs} & \textbf{Pass} & 32{,}800\\
-\midrule
-\multicolumn{4}{l}{\emph{\texttt{macro\_smoke} regression --- 123 ports $\times$ 400 cycles}}\\
-2. Design equivalence (CPU only) & macro-preserving synthesis & \textbf{Pass} & 49{,}200\\
-4. Compiled script vs \texttt{naive\_sim} & \texttt{pe.rs} / \texttt{flatten.rs} & \textbf{Pass} & 49{,}200\\
+Memory bandwidth      & DRAM $46.91\,\% \to 0.04\,\%$ of peak        & \M{} \textbf{Eliminated} --- traffic fell $1{,}173\times$\\
+Register spilling     & local ld/st $=0$; \code{STACK:0 LOCAL:0}     & \M{} \textbf{Eliminated} --- nothing spills\\
+Occupancy loss        & \code{sm\_\_warps\_active} $=33.33\,\%$ in \emph{both} & \M{} \textbf{Eliminated} --- residency identical\\
+Warp divergence       & $28.91 \to 19.78$ of 32 threads/instruction  & \M{} Real, but a small term of a 15.06\,ms kernel\\
+Grid synchronisation  & 1 barrier/cycle $\to$ 2                      & \I{} \textbf{Dominant}\\
 \bottomrule
 \end{tabular}
 \end{center}
 
-On \texttt{macro\_bench} the macro-preserving path evaluates 16 DSP48E2,
-64 CARRY4 --- including 16 four-deep \texttt{CO[3]}$\to$\texttt{CIN} chains ---
-and 16 SRLC32E natively on the GPU ALU, and reproduces netlist-level ground
-truth at every port and every timestamp.
+\F{} The extra grid barrier is the only structural difference between the two
+configurations that any measured quantity distinguishes. Two independent timings size
+it: $37.75\,\mu$s/cycle from Nsight over 200 cycles, and $31.1\,\mu$s/cycle from wall
+clock over 400 --- different instruments, different run lengths, agreeing to within
+$20\,\%$. \textbf{The macro-preserving path is synchronisation-bound: not
+memory-bound, not occupancy-bound.} It pays one additional grid-wide barrier per
+simulated cycle, which exceeds the bandwidth it saves at every scale measured so far.
 
-One dependency in that design exists purely as a regression test.
-\texttt{flags[l] = (sum\_l > 17'd100)} is ordinary AND-gate logic consuming a
-word-level CARRY4 result: precisely the macro$\to$boolean edge that was silently
-broken before the staging equations of \S\ref{sec:levelization} existed. It is
-exercised sixteen times per cycle.
+\textbf{What this result is not.} It is not a measurement of native macro evaluation
+being a poor idea; it is a measurement of \emph{where the crossover is not yet}.
+\Pj{} Fitting the shredded points gives $\approx 32\,\mu$s/cycle fixed plus script
+bytes at $\approx 165$\,GB/s marginal, which places the crossover near a 7\,MB
+shredded script --- beyond 32 lanes, whose script is 3,830\,KiB. That is an
+extrapolation from two intervals and is labelled as one.
 
-Rung 4 is what made the remaining defects findable. Once \texttt{flatten\_test}
-could execute the compiled script on the CPU, a rung-3/rung-4 disagreement
-localised the fault to the kernel and an agreement localised it to the host
-compiler --- where it could be reproduced and bisected in seconds instead of
-through GPU round-trips. Both of the defects in \S\ref{sec:latent} were found
-that way.
+\section{Limitations and Next Optimisation}\label{sec:next}
 
-The middle rung is what made the remaining defects findable. Once
-\texttt{flatten\_test} could execute the compiled script on the CPU, comparing
-it against the GPU isolated the kernel --- which agreed with it exactly, so
-every surviving error was in the host compiler, where it could be reproduced
-and fixed in seconds rather than through GPU round-trips.
+\begin{center}\footnotesize
+\begin{tabular}{@{}p{0.27\textwidth}p{0.28\textwidth}p{0.36\textwidth}@{}}
+\toprule
+Limitation & Evidence & Fix direction\\
+\midrule
+Slower than baseline: $0.61\times$ at 16 lanes & \M{} \S\ref{sec:bench} & remove the second major stage --- below\\
+32-lane native point missing & write-out budget rejected the mapping & \I{} budget now charges in-cone macros; re-measurement not performed\\
+Crossover scale is a projection & \Pj{} fit over two intervals & measure at 32 and 64 lanes\\
+Slang SystemVerilog frontend not exercised & \code{macro\_bench.sv} written Verilog-2001-shaped & run both flows on an SV-flavoured design under Yosys 0.68\\
+Warp utilisation 19.78/32 in the macro phase & \M{} \S\ref{sec:bench} & warp-cooperative macro evaluation; secondary to the barrier\\
+No comparison against other pools' submissions & --- & not available at time of writing\\
+\bottomrule
+\end{tabular}
+\end{center}
 
-\subsection{Defects the ladder exposed}
-\label{sec:latent}
+\textbf{The target follows from the equations.} Equation (4) charges $+1$ major stage
+exactly where a combinational macro output enters the boolean domain, and
+\S\ref{sec:bench} measures that stage at $31$--$38\,\mu$s per cycle. The optimisation
+target is therefore not a faster macro phase, a better memory layout, or reduced
+divergence --- all three are already past the point of diminishing return --- but the
+removal of that stage boundary.
 
-Every one was silent: correct-looking execution, wrong arithmetic, no
-diagnostic anywhere.
+\textbf{Proposal: level-1 overlay.} \Pj{} The barrier exists because the boomerang tree
+communicates through \code{shared\_state} while the macro phase writes
+\code{shared\_writeouts}. If a macro result were injected into the tree's level-1
+input set \emph{within the same partition}, the consumer cone would evaluate in the
+same major stage and $\mathrm{avail}(v)$ would equal $\mathrm{eval}(v)$ for
+$v \in \mathcal{O}_c$ --- collapsing equation (4). The native configuration would
+retain its $0.04\,\%$ DRAM utilisation and its $33.33\,\%$ occupancy while paying one
+barrier instead of two. Whether that is sufficient to cross $1.0\times$ is not
+determined by any measurement we hold, so we state no speedup figure for it. The
+change replaces the mechanism \S\ref{sec:sched} is built on and would require the full
+verification ladder to be re-run; it was scoped and deliberately not attempted, because
+shipping it unverified would have been worse than shipping a measured result.
 
-\paragraph{Write-out polarity.}
-A write-out slot stores the value of \texttt{pin\_iv}, which for an inverted
-pin is the complement of the AND-gate cover's raw result; the \texttt{data\_inv}
-table restores it at commit. The macro phase ran \emph{before} that correction
-and therefore read every inverted operand backwards --- observed as an exact
-whole-vector inversion on a CARRY4's \texttt{O} outputs. The correction now
-applies to \texttt{shared\_writeouts} in place, ahead of the macro phase; macro
-results are written afterwards and carry \texttt{data\_inv} $=0$, so they are
-correctly left alone.
+\section{Conclusion}
 
-\paragraph{Constant-one operands.}
-In the AIG's \texttt{iv} encoding both constants live on aigpin 0:
-$\mathtt{iv}=0$ is false and $\mathtt{iv}=1$ is \emph{true}. The formatter
-mapped both to the ``no bit'' sentinel, which reads as zero. A DSP instantiated
-with \texttt{.USE\_PREADD(1'b1)} therefore never applied its pre-adder, and one
-with \texttt{.MODE(2'd1)} silently became mode~0 --- bypass instead of
-multiply. One line, two unrelated-looking symptoms, no error at any point.
-\texttt{macro\_layout::CONST\_ONE} is now a distinct sentinel honoured by the
-formatter, the CPU executor and \texttt{GEM\_RD\_BIT} alike.
+\I{} We implemented macro-preserving synthesis, a heterogeneous DAG schedule, a
+64-bit aligned VRAM layout and native GPU evaluation for \code{DSP48E2},
+\code{CARRY4} and \code{SRLC32E} across 1,591 lines of new host and device code,
+leaving GEM's boomerang reduction tree unmodified.
 
-\paragraph{Duplicate write-outs landing in the macro block.}
-\label{sec:dup-defect}
-The kernel materialises the duplicate write-out words at
+\V{} The result is correct: four verification rungs pass at 32,800 port$\times$timestamp
+comparisons each, the macro models agree with an independent transcription over 14,552
+vectors, and the \code{CARRY4} space is covered exhaustively.
 
-\[
-\texttt{shared\_writeouts}\bigl[\,n_{io} - n_s - n_d + i\,\bigr],
-\]
+\M{} The representation objective is met and exceeded. AIG cells fall $14.8\times$,
+the per-cycle instruction script $4.53\times$, and --- because that reduction carries
+the script across the L2 capacity --- DRAM throughput falls from $46.91\,\%$ of peak
+to $0.04\,\%$.
 
-locating the block by subtracting from the \emph{top} of the write-out region.
-Under stock GEM's layout, $\text{normal} \Vert \text{duplicate} \Vert
-\text{SRAM}$, that expression evaluates to $n_w$ and is correct by
-construction. Inserting the macro block between the duplicates and the SRAMs
-shifts it up by $n_m$ words: every duplicate is then written \emph{inside the
-macro block}, and the slots the host actually assigned retain whatever the
-boomerang left in them.
+\M{} End-to-end throughput is $0.61\times$ the shredded baseline at 16 lanes. \F{} The
+deficit is one additional grid synchronisation per simulated cycle, worth
+$31$--$38\,\mu$s, established by eliminating memory bandwidth, register spilling and
+occupancy against measured data and corroborated by two independent timings.
+\Pj{} Removing that stage boundary is the single change the measurements identify.
 
-Nothing detects this. All positions remain in range, so the host-side bounds
-assertion passes; the macro phase subsequently overwrites the clobbered macro
-words with correct results, so macro \emph{outputs} still verify. Only operands
-\emph{read} through a duplicate slot are wrong --- that is, only pins a macro
-requires in the opposite polarity from the one the AND-gate cover produced.
+What this submission demonstrates is a correct heterogeneous architecture whose
+performance characteristics are understood quantitatively rather than asserted: we
+know what we built, we know it is right, we know precisely what it costs, and we know
+which line of the scheduling equations to attack next.
 
-The symptom was correspondingly strange. On \texttt{macro\_bench}, CARRY4
-blocks~2 and~3 were exact and blocks~0 and~1 were wrong. Bits $8$--$15$ lie
-above the reach of the per-lane perturbations, so all sixteen lanes there share
-one signal in one polarity and need no duplicate; the low blocks need both
-polarities of $x$ and $x \oplus y$. The error injected at the block-1 boundary
-then propagated up the carry chain with a per-bit halving decay, which reads
-convincingly as an arithmetic bug in the CARRY4 model --- where nothing was
-wrong.
+\section{Measurement Provenance}\label{sec:prov}
 
-The fix reorders the region to $\text{normal} \Vert \text{macro} \Vert
-\text{duplicate} \Vert \text{SRAM}$, restoring the invariant the kernel already
-assumes. Two lines in \texttt{flatten.rs} and \textbf{no kernel change}, which
-matters directly: teaching the kernel about $n_m$ would have cost a metadata
-word and a live value against the register budget of \S\ref{sec:occupancy}.
-
-\subsection{What the harness must guarantee}
-
-Two of this project's longest debugging episodes were not defects in the
-simulator at all. They are worth recording because both are structural traps
-that any GPU-simulator project can fall into, and both are now prevented by
-construction rather than by remembering.
-
-\paragraph{A \texttt{.gemparts} file is a build product, not an input.}
-It serialises each partition's stages \emph{and its macro batches}, so it
-encodes a snapshot of the scheduler in \texttt{pe.rs}. Changing the scheduler
-and reusing the file causes the simulator to faithfully execute the old
-schedule. One such run presented sixteen DSP48E2 instances that were endpoints,
-held state slots and committed every cycle --- and were never once scheduled
-into a batch, so \texttt{gem\_dsp48e2} was never called. Nothing reports that;
-the accumulators simply never move.
-\texttt{bench/verify\_ladder.sh} now re-maps both flows itself.
-
-\paragraph{A successful build is not proof the binary is current.}
-\texttt{Cargo.toml} declares \texttt{required-features = ["cuda"]} on
-\texttt{cuda\_test}. Cargo \emph{skips} a binary whose required features are
-absent --- silently, with exit status~0. A plain \texttt{cargo build --release}
-therefore relinks \texttt{naive\_sim}, \texttt{flatten\_test} and
-\texttt{cut\_map\_interactive}, leaves \texttt{cuda\_test} untouched, and
-reports success. Successive fixes were then evaluated against a stale kernel
-binary, producing a rung-3 failure whose mismatch counts were \emph{identical
-to the digit} across 32{,}800 comparisons on twelve ports --- which is what
-finally identified the cause, since no code change can leave a wrong answer
-bit-for-bit unchanged. The ladder now builds with \texttt{--features cuda} and
-additionally refuses to run if any file under \texttt{src/}, \texttt{csrc/},
-\texttt{build.rs} or \texttt{Cargo.toml} is newer than the binary.
-
-The general principle is the one this whole section argues: a verification
-harness that can report a result it has not actually established is worse than
-no harness, because it converts an absent measurement into a confident wrong
-one.
-
-%======================================================================
-\section{Measurement Provenance}
-\label{sec:provenance}
-%======================================================================
-
-\begin{center}
-\begin{tabular}{ll}
+\begin{center}\footnotesize
+\begin{multicols}{2}
+\begin{tabular}{@{}ll@{}}
 \toprule
 Figure & Source\\
 \midrule
-Cell counts & \texttt{synth/check\_macros.sh} on both flows\\
-Partition counts & \texttt{cut\_map\_interactive} ``after merging'' log\\
-Script size & \texttt{flatten.rs} ``Built script for'' log line\\
-Throughput, script size & \texttt{bench/throughput.sh}, 5 reps, median\\
-Kernel profile & \texttt{bench/profile.sh} (Nsight Compute)\\
-Ladder results & \texttt{bench/verify\_ladder.sh}\\
-Register / local memory & \texttt{cuobjdump -res-usage} on \texttt{libgemcu.a}\\
-SM count, blocks/SM & \texttt{bench/occupancy\_probe.cu}\\
-Word-state size, descriptors & \texttt{cut\_map\_interactive} log\\
-Kernel time & \texttt{cuda\_test} internal timer (excludes VCD parsing)\\
-Port agreement & \texttt{bench/compare\_vcd.py}\\
-Macro model vectors & \texttt{csrc/tests/verify\_macros.sh}\\
+Cell counts        & \code{synth/check\_macros.sh}\\
+Partition counts   & \code{cut\_map\_interactive} log\\
+Script size        & \code{flatten.rs} log line\\
+Throughput         & \code{bench/throughput.sh}\\
+Kernel profile     & \code{bench/profile.sh} (Nsight)\\
+Ladder results     & \code{bench/verify\_ladder.sh}\\
 \bottomrule
 \end{tabular}
+
+\begin{tabular}{@{}ll@{}}
+\toprule
+Figure & Source\\
+\midrule
+Registers / local memory & \code{cuobjdump -res-usage}\\
+SM count, blocks/SM      & \code{bench/occupancy\_probe.cu}\\
+L2, bandwidth            & \code{bench/memory\_probe.cu}\\
+Word state, descriptors  & \code{cut\_map\_interactive} log\\
+Port agreement           & \code{bench/compare\_vcd.py}\\
+Macro model vectors      & \code{csrc/tests/verify\_macros.sh}\\
+\bottomrule
+\end{tabular}
+\end{multicols}
 \end{center}
 
-Kernel time is GEM's own instrumented figure and excludes VCD parsing, which
-\texttt{usage.md} warns can dominate wall-clock time. Baseline and native are
-measured with the identical metric on the identical device.
+\noindent Kernel time is GEM's own instrumented figure and excludes VCD parsing.
+Baseline and native are measured with the identical metric on the identical device.
 
 \end{document}

@@ -55,15 +55,38 @@ run() {
     echo "================================================================"
     echo "  $label   (num_blocks=$NB, cycles=$CYC)"
     echo "================================================================"
+    local log="/tmp/prof_$(basename "$dir").log"
+    # --replay-mode application is REQUIRED here, not a tuning knob.
+    #
+    # GEM launches cooperatively: major stages are separated by
+    # this_grid().sync(), which requires every block to be co-resident. Nsight
+    # Compute's DEFAULT replay mode re-executes the kernel in isolation once
+    # per metric pass, and a cooperative launch cannot be replayed that way --
+    # the launch fails, GEM propagates the CUDA error, and the process aborts.
+    # ncu then reports only "the application returned an error code (101)",
+    # which is Rust's panic exit status and names nothing.
+    #
+    # Application replay re-runs the whole process once per pass instead, so
+    # every launch is a genuine cooperative launch. It is slower; at CYC=200
+    # that does not matter.
     ncu --metrics "$METRICS" \
         --kernel-name simulate_v1_noninteractive_simple_scan \
         --launch-count 1 --target-processes all \
+        --replay-mode application \
         ./target/release/cuda_test --top-module "$TOP" \
         --max-cycles "$CYC" \
         "$dir/gatelevel.gv" "$dir/r.gemparts" \
-        "$V" "/tmp/prof_$(basename "$dir").vcd" "$NB" 2>&1 \
-      | grep -E "dram__|sm__warps|smsp__thread|l1tex__|gpu__time|ERR_|error" \
-      | sed 's/^ *//'
+        "$V" "/tmp/prof_$(basename "$dir").vcd" "$NB" > "$log" 2>&1
+    if grep -qE "dram__|sm__warps|smsp__thread|l1tex__" "$log"; then
+        grep -E "dram__|sm__warps|smsp__thread|l1tex__|gpu__time" "$log" \
+          | sed 's/^ *//'
+    else
+        # No metrics came back. Say why rather than printing nothing: a
+        # profiler that fails quietly is how an absent measurement becomes an
+        # assumed one.
+        echo "NO METRICS -- last 25 lines of $log:"
+        tail -25 "$log" | sed 's/^/    /'
+    fi
 }
 
 echo "GPU: $(nvidia-smi --query-gpu=name,compute_cap --format=csv,noheader)"

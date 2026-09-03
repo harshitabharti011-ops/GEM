@@ -16,3 +16,8 @@ build_shred/
 # Scratch logs used to shuttle command output during development.
 .out.txt
 *.log
+
+# Generated build artifacts
+build_bench*/
+build_native/
+build_shred/
